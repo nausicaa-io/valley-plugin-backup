@@ -1,0 +1,157 @@
+{
+  "icon": "hard-drive",
+  "main": "runtime/index.js",
+  "uiSlots": {
+    "left_sidebar": "backup.panel"
+  },
+  "slotDefaults": {
+    "left_sidebar": {
+      "order": 200
+    }
+  },
+  "storageInventory": [
+    {
+      "id": "profiles",
+      "kind": "files",
+      "store": "durable",
+      "driver": "backup"
+    },
+    {
+      "id": "archives",
+      "kind": "directory",
+      "store": "external",
+      "driver": "backup"
+    },
+    {
+      "id": "logs",
+      "kind": "directory",
+      "store": "external",
+      "driver": "backup"
+    }
+  ],
+  "settingsSchema": {
+    "fields": [
+      {
+        "key": "profiles",
+        "label": "Backup profiles",
+        "type": "custom",
+        "description": "Each profile's source/destination mappings, trash path and log locations.",
+        "labelKey": "auto.caa8c9ee85cb",
+        "descriptionKey": "auto.80f1eaf78461"
+      },
+      {
+        "key": "activeProfileId",
+        "label": "Active profile",
+        "type": "text",
+        "default": "",
+        "description": "Id of the profile the panel and the scheduled run use.",
+        "labelKey": "auto.d74340399e2a",
+        "descriptionKey": "auto.97bc98400c87"
+      }
+    ]
+  },
+  "settingsView": "backup.settings",
+  "drivers": [
+    "backup"
+  ],
+  "guardPresets": {
+    "schemaVersion": 1,
+    "defaultPreset": "recommended",
+    "presets": [
+      {
+        "id": "recommended",
+        "label": "Recommended",
+        "version": 1,
+        "description": "Status reads run freely; running a backup confirms first.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            }
+          }
+        }
+      },
+      {
+        "id": "read-only",
+        "label": "Read-only",
+        "version": 1,
+        "description": "Status only; never run a backup.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "deny"
+            }
+          }
+        }
+      },
+      {
+        "id": "blocked",
+        "label": "Blocked",
+        "version": 1,
+        "description": "No backup actions at all.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "deny"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "provides": [
+    {
+      "id": "workspace.surface",
+      "kind": "extension",
+      "version": "1.0.0"
+    }
+  ],
+  "datasets": [
+    {
+      "id": "backup_runs",
+      "store": "durable",
+      "version": 1,
+      "title": "Backup runs",
+      "primaryKey": [
+        "id"
+      ],
+      "columns": {
+        "id": {
+          "type": "text"
+        },
+        "startedAt": {
+          "type": "datetime"
+        },
+        "profileName": {
+          "type": "text"
+        },
+        "durationSec": {
+          "type": "real"
+        },
+        "archived": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "integer"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "text",
+          "nullable": true
+        }
+      },
+      "indexes": [
+        {
+          "id": "started",
+          "columns": [
+            "startedAt"
+          ]
+        }
+      ],
+      "titleKey": "auto.3ef11aabc275"
+    }
+  ]
+}

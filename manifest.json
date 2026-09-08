@@ -1,0 +1,14 @@
+{
+  "apiVersion": 4,
+  "id": "backup",
+  "name": "Backup",
+  "description": "Mirror configured folders with Valley's native backup engine, streaming progress live. Runs in the main process via the backup driver.",
+  "version": "1.2.0",
+  "author": "Yanik",
+  "authorUrl": "https://github.com/yanik02",
+  "isDesktopOnly": true,
+  "minAppVersion": "0.1.0",
+  "enabled": true,
+  "nameKey": "auto.dd96994d01e7",
+  "descriptionKey": "auto.237d0a57fc14"
+}
