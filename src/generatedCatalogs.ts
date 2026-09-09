@@ -15,7 +15,7 @@ export const generatedCatalogs = {
     "auto.1c36bd34ec77": "Computing restore preview…",
     "auto.1d164664f6ed": "Done — {{p0}} archived in {{p1}}s",
     "auto.1df120c8de5c": "T7 Drive",
-    "auto.237d0a57fc14": "Mirror configured folders with Valley's native backup engine, streaming progress live. Runs in the main process via the backup driver.",
+    "auto.237d0a57fc14": "Mirror configured folders through Valley's filesystem capability, with live progress and recoverable archives.",
     "auto.2700ef39cb59": "Cleanup failed",
     "auto.362a1984d15b": "Remove profile",
     "auto.3ad30e772903": "Master log file",
@@ -83,7 +83,12 @@ export const generatedCatalogs = {
     "auto.f7aa648b33ac": "No backups yet — every run you start shows up here.",
     "auto.f7b023b83c72": "Removing old archives…",
     "auto.f9dcc3004855": "A one-line summary is appended here after each run.",
-    "auto.ff61c7ba16aa": "Remove?"
+    "auto.ff61c7ba16aa": "Remove?",
+    "notifications.group.backup": "Backup",
+    "notifications.event.backup.finished": "Backup finished",
+    "notifications.event.backup.failed": "Backup failed",
+    "plugin.backup.desc": "Mirror configured folders with Valley's native backup engine, with live progress and recoverable archives.",
+    "plugin.backup.name": "Backup"
   },
   "de": {
     "auto.0894fe6b352a": "z.B. den Ordner, den Sie sichern möchten",
@@ -99,7 +104,7 @@ export const generatedCatalogs = {
     "auto.1c36bd34ec77": "Computing-Wiederherstellungsvorschau…",
     "auto.1d164664f6ed": "Fertig – {{p0}} archiviert in {{p1}}s",
     "auto.1df120c8de5c": "T7-Laufwerk",
-    "auto.237d0a57fc14": "Spiegeln Sie konfigurierte Ordner mit der nativen Backup-Engine von Valley und streamen Sie den Fortschritt live. Läuft im Hauptprozess über den Backup-Treiber.",
+    "auto.237d0a57fc14": "Konfigurierte Ordner über Valleys Dateisystemfunktion spiegeln, mit Live-Fortschritt und wiederherstellbaren Archiven.",
     "auto.2700ef39cb59": "Die Bereinigung ist fehlgeschlagen",
     "auto.362a1984d15b": "Profil entfernen",
     "auto.3ad30e772903": "Master-Logdatei",
@@ -167,7 +172,12 @@ export const generatedCatalogs = {
     "auto.f7aa648b33ac": "Noch keine Backups – jeder Durchlauf erscheint hier.",
     "auto.f7b023b83c72": "Alte Archive entfernen…",
     "auto.f9dcc3004855": "Nach jedem Lauf wird hier eine einzeilige Zusammenfassung angehängt.",
-    "auto.ff61c7ba16aa": "Entfernen?"
+    "auto.ff61c7ba16aa": "Entfernen?",
+    "notifications.group.backup": "Sicherung",
+    "notifications.event.backup.finished": "Backup abgeschlossen",
+    "notifications.event.backup.failed": "Backup fehlgeschlagen",
+    "plugin.backup.desc": "Konfigurierte Ordner mit Valleys nativer Backup-Engine spiegeln, mit Live-Fortschritt und wiederherstellbaren Archiven.",
+    "plugin.backup.name": "Sicherung"
   },
   "es": {
     "auto.0894fe6b352a": "p.ej. la carpeta de la que desea hacer una copia de seguridad",
@@ -183,7 +193,7 @@ export const generatedCatalogs = {
     "auto.1c36bd34ec77": "Vista previa de restauración informática…",
     "auto.1d164664f6ed": "Listo: {{p0}} archivado en {{p1}} s",
     "auto.1df120c8de5c": "Unidad T7",
-    "auto.237d0a57fc14": "Refleje las carpetas configuradas con el motor de respaldo nativo de Valley y transmita el progreso en vivo. Se ejecuta en el proceso principal a través del controlador de respaldo.",
+    "auto.237d0a57fc14": "Replica las carpetas configuradas mediante las funciones de archivos de Valley, con progreso en directo y archivos recuperables.",
     "auto.2700ef39cb59": "Error de limpieza",
     "auto.362a1984d15b": "Eliminar perfil",
     "auto.3ad30e772903": "Archivo de registro maestro",
@@ -251,7 +261,12 @@ export const generatedCatalogs = {
     "auto.f7aa648b33ac": "Aún no hay copias de seguridad: cada ejecución que inicies aparecerá aquí.",
     "auto.f7b023b83c72": "Eliminando archivos antiguos…",
     "auto.f9dcc3004855": "Se adjunta aquí un resumen de una línea después de cada ejecución.",
-    "auto.ff61c7ba16aa": "¿Eliminar?"
+    "auto.ff61c7ba16aa": "¿Eliminar?",
+    "notifications.group.backup": "Copia de seguridad",
+    "notifications.event.backup.finished": "Copia de seguridad terminada",
+    "notifications.event.backup.failed": "La copia de seguridad falló",
+    "plugin.backup.desc": "Replica las carpetas configuradas con el motor de copias nativo de Valley, con progreso en vivo y archivos recuperables.",
+    "plugin.backup.name": "Copia de seguridad"
   },
   "fr": {
     "auto.0894fe6b352a": "par ex. le dossier que vous souhaitez sauvegarder",
@@ -267,7 +282,7 @@ export const generatedCatalogs = {
     "auto.1c36bd34ec77": "Aperçu de la restauration informatique…",
     "auto.1d164664f6ed": "Terminé — {{p0}} archivé dans {{p1}}s",
     "auto.1df120c8de5c": "Lecteur T7",
-    "auto.237d0a57fc14": "Mettez en miroir les dossiers configurés avec le moteur de sauvegarde natif de Valley et diffusez la progression en direct. S'exécute dans le processus principal via le pilote de sauvegarde.",
+    "auto.237d0a57fc14": "Répliquez les dossiers configurés avec les fonctions de fichiers de Valley, avec progression en direct et archives récupérables.",
     "auto.2700ef39cb59": "Échec du nettoyage",
     "auto.362a1984d15b": "Supprimer le profil",
     "auto.3ad30e772903": "Fichier journal principal",
@@ -335,7 +350,12 @@ export const generatedCatalogs = {
     "auto.f7aa648b33ac": "Aucune sauvegarde pour l'instant : chaque exécution que vous démarrez apparaît ici.",
     "auto.f7b023b83c72": "Suppression des anciennes archives…",
     "auto.f9dcc3004855": "Un résumé d’une ligne est annexé ici après chaque exécution.",
-    "auto.ff61c7ba16aa": "Supprimer ?"
+    "auto.ff61c7ba16aa": "Supprimer ?",
+    "notifications.group.backup": "Sauvegarde",
+    "notifications.event.backup.finished": "Sauvegarde terminée",
+    "notifications.event.backup.failed": "Échec de la sauvegarde",
+    "plugin.backup.desc": "Réplique les dossiers configurés avec le moteur de sauvegarde natif de Valley, avec progression en direct et archives récupérables.",
+    "plugin.backup.name": "Sauvegarde"
   },
   "zh-CN": {
     "auto.0894fe6b352a": "例如您要备份的文件夹",
@@ -351,7 +371,7 @@ export const generatedCatalogs = {
     "auto.1c36bd34ec77": "计算恢复预览…",
     "auto.1d164664f6ed": "完成 — {{p0}} 已在 {{p1}} 秒内存档",
     "auto.1df120c8de5c": "T7 驱动器",
-    "auto.237d0a57fc14": "使用 Valley 的本机备份引擎镜像配置的文件夹，实时传输进度。通过备份驱动程序在主进程中运行。",
+    "auto.237d0a57fc14": "通过 Valley 的文件系统功能镜像配置的文件夹，显示实时进度并保留可恢复的归档。",
     "auto.2700ef39cb59": "清理失败",
     "auto.362a1984d15b": "删除配置文件",
     "auto.3ad30e772903": "主日志文件",
@@ -419,6 +439,11 @@ export const generatedCatalogs = {
     "auto.f7aa648b33ac": "还没有备份 - 您开始的每次运行都会显示在这里。",
     "auto.f7b023b83c72": "删除旧档案…",
     "auto.f9dcc3004855": "每次运行后都会在此处附加一行摘要。",
-    "auto.ff61c7ba16aa": "移除？"
+    "auto.ff61c7ba16aa": "移除？",
+    "notifications.group.backup": "备份",
+    "notifications.event.backup.finished": "备份完成",
+    "notifications.event.backup.failed": "备份失败",
+    "plugin.backup.desc": "使用 Valley 原生备份引擎镜像配置的文件夹，实时显示进度，并保留可恢复的归档。",
+    "plugin.backup.name": "备份"
   }
 } satisfies BundledPluginTranslationCatalogs

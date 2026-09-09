@@ -5,7 +5,7 @@ import type { ComponentType } from 'react'
 import { createMockValleyApi } from '@valley/plugin-testkit'
 import { register } from '../src/index'
 import { initLocalization, uiText } from '../src/localization'
-import { createProfileStore } from '../src/profiles'
+import { createProfileStore, mirrorPlan, parseProfiles, serializeProfile } from '../src/profiles'
 import { createBackupOperations, registerBackupCommands } from '../src/commands'
 
 afterEach(cleanup)
@@ -134,12 +134,48 @@ describe('Backup automation and shared drafts', () => {
     const store = createProfileStore(api)
     const operations = createBackupOperations(api, store)
     const off = registerBackupCommands(api, store, operations)
-    api.drivers.backup.check = vi.fn(async () => ({ ok: false, error: 'Source is unavailable' }))
-    api.drivers.backup.run = vi.fn()
+    api.drivers.mirror.check = vi.fn(async () => ({ ok: false, error: 'Source is unavailable' }))
+    api.drivers.mirror.run = vi.fn()
     try {
       expect(await api.commands.execute('backup:profile-read', { profileId: 'missing' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('not found') } })
       expect(await api.commands.execute('backup:run', { profileId: 'forest' })).toMatchObject({ ok: false, error: { message: 'Source is unavailable' } })
-      expect(api.drivers.backup.run).not.toHaveBeenCalled()
+      expect(api.drivers.mirror.run).not.toHaveBeenCalled()
     } finally { off(); store.dispose() }
+  })
+})
+
+describe('Backup owns mirror plans', () => {
+  it('preserves disabled retention and filters incomplete mapping drafts only in the execution plan', () => {
+    const [profile] = parseProfiles({ profiles: [{ id: 'fern', name: 'Fern archive', retention: 'off', mappings: [
+      { source: ' /source ', destination: ' /destination ', exclude: ['*.tmp'] },
+      { source: '/unfinished', destination: '' }
+    ] }] })
+    expect(serializeProfile(profile).retention).toBe('off')
+    expect(serializeProfile(profile).mappings).toHaveLength(2)
+    expect(mirrorPlan(profile)).toEqual({
+      label: 'Fern archive', mappings: [{ source: '/source', destination: '/destination', exclude: ['*.tmp'] }],
+      trashPath: '', logDirectory: '', masterLog: '', retention: null
+    })
+    expect(mirrorPlan(profile, true).retention).toEqual({ keepDays: 7, dailies: 30, weeklies: 8 })
+  })
+
+  it('passes one explicit saved plan to the generic driver and retains plugin history and notification ownership', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: { activeProfileId: 'fern', profiles: [
+      { id: 'fern', name: 'Fern archive', mappings: [{ source: '/source', destination: '/destination' }] }
+    ] } })
+    const store = createProfileStore(api)
+    const operations = createBackupOperations(api, store)
+    api.drivers.mirror.check = vi.fn(async () => ({ ok: true, data: { ok: true, issues: [] } }))
+    api.drivers.mirror.run = vi.fn(async () => ({ ok: true, data: { ok: true, mappings: 1, archived: 2, durationSec: 3, errors: 0 } }))
+    api.notifications.notify = vi.fn(async () => true)
+    await operations.run()
+    const [checked] = vi.mocked(api.drivers.mirror.check).mock.calls[0]
+    expect(vi.mocked(api.drivers.mirror.run).mock.calls[0][0]).toBe(checked)
+    expect(checked).toMatchObject({ label: 'Fern archive', retention: { keepDays: 7, dailies: 30, weeklies: 8 } })
+    expect(checked).not.toHaveProperty('profileId')
+    expect((await operations.history()).rows[0]).toMatchObject({ profileName: 'Fern archive', archived: 2 })
+    expect(api.notifications.notify).toHaveBeenCalledWith('finished', expect.objectContaining({ body: 'Fern archive' }))
+    operations.dispose()
+    store.dispose()
   })
 })

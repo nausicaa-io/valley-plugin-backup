@@ -3,8 +3,8 @@
  * of independent backup *profiles* (e.g. one per external drive), picks one from
  * the header dropdown, and "Back up now" triggers the native mirror backup for that
  * profile in the main process, streaming its output live. The main-process work
- * runs through the SDK's `backup` driver (declared in the manifest):
- * `api.drivers.backup.run(profileId)` starts it and `api.drivers.backup.onProgress()`
+ * runs through the SDK's `mirror` driver (declared in the manifest):
+ * `api.drivers.mirror.run(plan)` starts it and `api.drivers.mirror.onProgress()`
  * streams log lines/progress back.
  *
  * Panel chrome: the standard 37px `.panel-header` (title + profile dropdown) over a
@@ -19,7 +19,7 @@
  * bundle.
  */
 import { PLUGIN_SURFACE_V1, type ValleyPluginApi, type ValleyPluginModule, type UiMenuItem } from '@valley/plugin-sdk'
-import type { BackupIssue, BackupMappingResult, BackupProgressUpdate, BackupResult } from '@valley/plugin-sdk/types'
+import type { MirrorIssue, MirrorMappingResult, MirrorProgressUpdate, MirrorResult } from '@valley/plugin-sdk/types'
 import { initLocalization } from './localization'
 import { uiText } from './localization'
 import { injectStyles } from './styles'
@@ -89,7 +89,7 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0
 }
 
-// ---- Profile model (mirrors src/main/vault/backup.ts) ----------------------
+// ---- Profile settings -----------------------------------------------------
 
 type SettingsViewState = { kind: 'list' } | { kind: 'profile'; id: string }
 
@@ -175,7 +175,7 @@ export function register(api: ValleyPluginApi): () => void {
     h('path', { d: 'M12 9v4M12 17h.01' })
   ])
 
-  const STATUS_ICON: Record<BackupMappingResult['status'], ReturnType<typeof h>> = {
+  const STATUS_ICON: Record<MirrorMappingResult['status'], ReturnType<typeof h>> = {
     running: IconLoader,
     done: IconCheck,
     skipped: IconBan,
@@ -186,9 +186,9 @@ export function register(api: ValleyPluginApi): () => void {
     const [status, setStatus] = React.useState<Status>('idle')
     const [summary, setSummary] = React.useState('')
     const [lines, setLines] = React.useState<string[]>([])
-    const [progress, setProgress] = React.useState<BackupProgressUpdate | null>(null)
-    const [mappingResults, setMappingResults] = React.useState<BackupMappingResult[]>([])
-    const [issues, setIssues] = React.useState<BackupIssue[]>([])
+    const [progress, setProgress] = React.useState<MirrorProgressUpdate | null>(null)
+    const [mappingResults, setMappingResults] = React.useState<MirrorMappingResult[]>([])
+    const [issues, setIssues] = React.useState<MirrorIssue[]>([])
     const [profiles, setProfiles] = React.useState<Array<{ id: string; name: string }>>([])
     const viewState = React.useSyncExternalStore(subscribeView, () => backupView)
     const selectedId = viewState.profileId
@@ -256,7 +256,7 @@ export function register(api: ValleyPluginApi): () => void {
     }, [refreshProfiles, loadHistory])
 
     React.useEffect(() => {
-      const off = api.drivers.backup.onProgress((p) => {
+      const off = api.drivers.mirror.onProgress((p) => {
         if (p.update) {
           setProgress(p.update)
           return
@@ -326,7 +326,7 @@ export function register(api: ValleyPluginApi): () => void {
       if (status === 'running') return
       setIssues([])
       // 1. Pre-flight — block with a clear alert instead of spewing mirror errors.
-      const pre = await api.drivers.backup.check(selectedId || undefined)
+      const pre = await api.drivers.mirror.check(operations.plan(selectedId || undefined))
       if (!pre.ok || !pre.data || !pre.data.ok) {
         setIssues(
           pre.data?.issues ?? [
@@ -351,7 +351,7 @@ export function register(api: ValleyPluginApi): () => void {
       maxOverallRef.current = 0
       setStatus('running')
       const invoked = await operations.run(selectedId || undefined, true)
-      const result: BackupResult | undefined = invoked.data
+      const result: MirrorResult | undefined = invoked.data
       setProgress(null)
       if (!invoked.ok || !result) {
         setStatus('failed')
@@ -381,8 +381,7 @@ export function register(api: ValleyPluginApi): () => void {
       | { kind: 'note'; text: string }
     >({ kind: 'idle' })
 
-    // Mappings of the selected profile, filtered exactly like the engine's
-    // normalizeBackupConfig so mappingIndex lines up with the driver.
+    // Use the same plan for the displayed mapping indices and filesystem operations.
     const selectedMappings = (() => {
       const s = api.settings.get() as { profiles?: Array<Record<string, unknown>> }
       const raw = (s.profiles ?? []).find((p) => str(p.id) === selectedId)
@@ -394,7 +393,7 @@ export function register(api: ValleyPluginApi): () => void {
 
     const runPrune = async (): Promise<void> => {
       setMaint({ kind: 'busy', label: uiText('auto.b2b841a7fc71') })
-      const dry = await api.drivers.backup.prune({ profileId: selectedId || undefined, dryRun: true })
+      const dry = await api.drivers.mirror.prune(operations.plan(selectedId || undefined, true), { dryRun: true })
       if (!dry.ok || !dry.data) {
         setMaint({ kind: 'note', text: uiText('auto.2700ef39cb59') })
         return
@@ -407,7 +406,7 @@ export function register(api: ValleyPluginApi): () => void {
     }
     const confirmPrune = async (): Promise<void> => {
       setMaint({ kind: 'busy', label: uiText('auto.f7b023b83c72') })
-      const res = await api.drivers.backup.prune({ profileId: selectedId || undefined })
+      const res = await api.drivers.mirror.prune(operations.plan(selectedId || undefined, true))
       setMaint({
         kind: 'note',
         text:
@@ -419,7 +418,7 @@ export function register(api: ValleyPluginApi): () => void {
     }
     const planRestore = async (mi: number): Promise<void> => {
       setMaint({ kind: 'busy', label: uiText('auto.1c36bd34ec77') })
-      const res = await api.drivers.backup.restorePlan(mi, selectedId || undefined)
+      const res = await api.drivers.mirror.restorePlan(operations.plan(selectedId || undefined), mi)
       if (!res.ok || !res.data?.ok) {
         setMaint({ kind: 'note', text: uiText('auto.d7f2768ca570') })
         return
@@ -434,7 +433,7 @@ export function register(api: ValleyPluginApi): () => void {
     }
     const applyRestore = async (mi: number): Promise<void> => {
       setMaint({ kind: 'busy', label: uiText('auto.df34924ef17e') })
-      const res = await api.drivers.backup.restoreApply(mi, selectedId || undefined)
+      const res = await api.drivers.mirror.restoreApply(operations.plan(selectedId || undefined), mi)
       setMaint({
         kind: 'note',
         text:
@@ -774,7 +773,7 @@ export function register(api: ValleyPluginApi): () => void {
                   'div',
                   { className: 'backup-row-actions' },
                   btn(uiText('auto.90c0c2eb98de'), () =>
-                    void api.drivers.backup.reveal(m.destination, selectedId || undefined)
+                    void api.drivers.mirror.reveal(operations.plan(selectedId || undefined), m.destination)
                   ),
                   btn(uiText('auto.54a694543dfe'), () => void planRestore(mi), { disabled: maintBusy })
                 )

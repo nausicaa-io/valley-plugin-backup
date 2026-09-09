@@ -1,6 +1,7 @@
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
-import type { BackupProgress } from '@valley/plugin-sdk/types'
-import { genId, parseProfiles, serializeProfile, type createProfileStore, type Profile } from './profiles'
+import type { MirrorProgress } from '@valley/plugin-sdk/types'
+import { uiText } from './localization'
+import { genId, parseProfiles, serializeProfile, mirrorPlan, type createProfileStore, type Profile } from './profiles'
 
 type ProfileStore = ReturnType<typeof createProfileStore>
 type ProfileTarget = { profileId?: string }
@@ -45,8 +46,8 @@ function profilePatch(raw: unknown): Record<string, unknown> {
 export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore) {
   let running = false
   let runningProfileId: string | null = null
-  let latestProgress: BackupProgress | null = null
-  const offProgress = api.drivers.backup.onProgress((progress) => { latestProgress = progress })
+  let latestProgress: MirrorProgress | null = null
+  const offProgress = api.drivers.mirror.onProgress((progress) => { latestProgress = progress })
   const profile = (profileId?: string): Profile => {
     const profiles = store.getSnapshot()
     const id = profileId ?? String(api.settings.get().activeProfileId ?? '')
@@ -59,23 +60,31 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     store.assertClean()
     if (running) throw new Error('A backup is already running. Check backup:status before starting another.')
     const selected = profile(profileId)
+    const plan = mirrorPlan(selected)
     running = true
     runningProfileId = selected.id
     latestProgress = null
     try {
     if (!prechecked) {
-      const checked = await api.drivers.backup.check(selected.id)
+      const checked = await api.drivers.mirror.check(plan)
       if (!checked.ok || !checked.data?.ok) throw new Error(checked.error ?? checked.data?.issues.map((issue) => issue.message).join('; ') ?? 'Backup precheck failed')
     }
     const startedAt = new Date().toISOString()
-    const result = await api.drivers.backup.run(selected.id)
+    const result = await api.drivers.mirror.run(plan)
     if (result.data) {
       const data = result.data
-      await api.data.dataset('backup_runs').insert({ id: crypto.randomUUID(), startedAt, profileName: data.profileName ?? selected.name, durationSec: data.durationSec, archived: data.archived, errors: data.errors, ok: data.ok, reason: data.ok ? null : data.message ?? null })
+      await api.data.dataset('backup_runs').insert({ id: crypto.randomUUID(), startedAt, profileName: selected.name, durationSec: data.durationSec, archived: data.archived, errors: data.errors, ok: data.ok, reason: data.ok ? null : data.message ?? null })
       const records = await history(1000)
       for (const stale of records.rows.slice(50)) await api.data.dataset('backup_runs').delete({ id: String(stale.id) })
     }
+    await api.notifications.notify(result.ok && result.data?.ok ? 'finished' : 'failed', {
+      title: uiText(result.ok && result.data?.ok ? 'backup.notification.finished' : 'backup.notification.failed'),
+      body: selected.name
+    })
     return result
+    } catch (error) {
+      await api.notifications.notify('failed', { title: uiText('backup.notification.failed'), body: selected.name })
+      throw error
     } finally { running = false }
   }
   const replace = async (next: Profile[], before: Profile[]) => {
@@ -101,18 +110,18 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const [next] = parseProfiles({ profiles: [{ ...serializeProfile(selected), ...patch }] })
     return replace(before.map((item) => item.id === selected.id ? next : item), before)
   }
-  return { profile, history, run, replace, update, status: () => ({ running, profileId: runningProfileId, progress: latestProgress }), dispose: offProgress }
+  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, run, replace, update, status: () => ({ running, profileId: runningProfileId, progress: latestProgress }), dispose: offProgress }
 }
 
 export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore, operations: ReturnType<typeof createBackupOperations>): () => void {
   const profileRevision = ({ profileId }: ProfileTarget) => serializeProfile(operations.profile(profileId))
   const prunePreview = async ({ profileId }: ProfileTarget) => {
-    const result = await api.drivers.backup.prune({ profileId: operations.profile(profileId).id, dryRun: true })
+    const result = await api.drivers.mirror.prune(operations.plan(profileId, true), { dryRun: true })
     if (!result.ok || !result.data || result.data.errors.length) throw new Error(result.error ?? result.data?.errors.map((entry) => entry.message).join('; ') ?? 'Could not inspect backup retention')
     return result.data
   }
   const restorePreview = async ({ profileId, mappingIndex }: { profileId: string; mappingIndex: number }) => {
-    const result = await api.drivers.backup.restorePlan(mappingIndex, profileId)
+    const result = await api.drivers.mirror.restorePlan(operations.plan(profileId), mappingIndex)
     if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Could not inspect this restore')
     return result.data
   }
@@ -144,12 +153,12 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
       run: async ({ profileId }) => { const selected = operations.profile(profileId); const before = store.getSnapshot(); return operations.replace(before.filter((item) => item.id !== selected.id), before) }
     }),
     api.commands.register({ id: 'check', label: 'Check backup profile', labelKey: 'backup.surface.check', paletteSafe: false, sideEffect: 'read', input: targetInput, run: async ({ profileId }) => {
-      const result = await api.drivers.backup.check(operations.profile(profileId).id)
+      const result = await api.drivers.mirror.check(operations.plan(profileId))
       if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.issues.map((issue) => issue.message).join('; ') ?? 'Backup precheck failed')
       return result.data
     } }),
     api.commands.register({ id: 'run', label: 'Backup now', labelKey: 'auto.5d5dba0742de', sideEffect: 'write', input: targetInput,
-      revision: profileRevision, preview: ({ profileId }) => api.drivers.backup.check(operations.profile(profileId).id),
+      revision: profileRevision, preview: ({ profileId }) => api.drivers.mirror.check(operations.plan(profileId)),
       run: async ({ profileId }) => { const result = await operations.run(profileId); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Backup failed'); return { value: result.data, revert: null } }
     }),
     api.commands.register({ id: 'history', label: 'Read backup history', labelKey: 'backup.surface.history', paletteSafe: false, sideEffect: 'read',
@@ -159,12 +168,12 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
     api.commands.register({ id: 'prune-preview', label: 'Preview backup retention', labelKey: 'backup.surface.prune-preview', paletteSafe: false, sideEffect: 'read', input: targetInput, run: prunePreview }),
     api.commands.register({ id: 'prune', label: 'Apply backup retention', labelKey: 'backup.surface.prune', paletteSafe: false, sideEffect: 'write', input: targetInput,
       revision: async (input) => ({ profile: profileRevision(input), plan: await prunePreview(input) }), preview: prunePreview,
-      run: async ({ profileId }) => { const result = await api.drivers.backup.prune({ profileId: operations.profile(profileId).id, dryRun: false }); if (!result.ok || result.data?.errors.length) throw new Error(result.error ?? `Retention did not finish. ${result.data?.dropped.length ?? 0} archives were removed; inspect history before retrying.`); return { value: result.data, revert: null } }
+      run: async ({ profileId }) => { const result = await api.drivers.mirror.prune(operations.plan(profileId, true), { dryRun: false }); if (!result.ok || result.data?.errors.length) throw new Error(result.error ?? `Retention did not finish. ${result.data?.dropped.length ?? 0} archives were removed; inspect history before retrying.`); return { value: result.data, revert: null } }
     }),
     api.commands.register({ id: 'restore-preview', label: 'Preview backup restore', labelKey: 'backup.surface.restore-preview', paletteSafe: false, sideEffect: 'read', input: mappingInput, run: restorePreview }),
     api.commands.register({ id: 'restore', label: 'Restore backup mapping', labelKey: 'backup.surface.restore', paletteSafe: false, sideEffect: 'write', input: mappingInput,
       revision: async (input) => ({ profile: profileRevision(input), plan: await restorePreview(input) }), preview: restorePreview,
-      run: async ({ profileId, mappingIndex }) => { const result = await api.drivers.backup.restoreApply(mappingIndex, profileId); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Restore failed'); return { value: result.data, revert: null } }
+      run: async ({ profileId, mappingIndex }) => { const result = await api.drivers.mirror.restoreApply(operations.plan(profileId), mappingIndex); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Restore failed'); return { value: result.data, revert: null } }
     })
   ]
   return () => { for (const dispose of off) dispose(); operations.dispose() }

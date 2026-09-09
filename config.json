@@ -52,7 +52,8 @@
   },
   "settingsView": "backup.settings",
   "drivers": [
-    "backup"
+    "mirror",
+    "notifications"
   ],
   "guardPresets": {
     "schemaVersion": 1,
@@ -152,6 +153,20 @@
         }
       ],
       "titleKey": "auto.3ef11aabc275"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "finished",
+      "label": "Backup finished",
+      "labelKey": "backup.notification.finished",
+      "defaultChannel": "toast"
+    },
+    {
+      "id": "failed",
+      "label": "Backup failed",
+      "labelKey": "backup.notification.failed",
+      "defaultChannel": "both"
     }
   ]
 }

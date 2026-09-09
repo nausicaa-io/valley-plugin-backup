@@ -1,4 +1,5 @@
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
+import type { MirrorPlan } from '@valley/plugin-sdk/types'
 
 export type Row = { source: string; destination: string; excludeText: string }
 export type Profile = {
@@ -8,6 +9,7 @@ export type Profile = {
   trashPath: string
   logDirectory: string
   masterLog: string
+  retention?: 'standard' | 'off'
 }
 
 export const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v))
@@ -34,7 +36,8 @@ export const parseProfiles = (s: Record<string, unknown>): Profile[] => {
       rows: rowsFromMappings(p.mappings),
       trashPath: str(p.trashPath),
       logDirectory: str(p.logDirectory),
-      masterLog: str(p.masterLog)
+      masterLog: str(p.masterLog),
+      retention: p.retention === 'off' ? 'off' : 'standard'
     }))
 }
 
@@ -47,6 +50,7 @@ export const serializeProfile = (
   trashPath: string
   logDirectory: string
   masterLog: string
+  retention: 'standard' | 'off'
 } => ({
   id: p.id,
   name: p.name.trim() || 'Untitled',
@@ -60,7 +64,8 @@ export const serializeProfile = (
   })),
   trashPath: p.trashPath.trim(),
   logDirectory: p.logDirectory.trim(),
-  masterLog: p.masterLog.trim()
+  masterLog: p.masterLog.trim(),
+  retention: p.retention ?? 'standard'
 })
 
 export function createProfileStore(api: ValleyPluginApi) {
@@ -103,5 +108,17 @@ export function createProfileStore(api: ValleyPluginApi) {
     save,
     assertClean: () => { if (dirty) throw new Error('Finish editing backup settings before changing profiles through automation') },
     dispose: () => { off(); listeners.clear() }
+  }
+}
+
+export function mirrorPlan(profile: Profile, forceRetention = false): MirrorPlan {
+  const saved = serializeProfile(profile)
+  return {
+    label: saved.name,
+    mappings: saved.mappings.filter((mapping) => mapping.source && mapping.destination),
+    trashPath: saved.trashPath,
+    logDirectory: saved.logDirectory,
+    masterLog: saved.masterLog,
+    retention: !forceRetention && saved.retention === 'off' ? null : { keepDays: 7, dailies: 30, weeklies: 8 }
   }
 }

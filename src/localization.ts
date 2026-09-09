@@ -3,6 +3,8 @@ import { generatedCatalogs } from './generatedCatalogs'
 
 const surfaceCatalogs = {
   "en": {
+    "backup.notification.finished": "Backup finished",
+    "backup.notification.failed": "Backup failed",
     "backup.surface.status": "Backup progress",
     "backup.surface.profiles": "List backup profiles",
     "backup.surface.profile-read": "Read backup profile",
@@ -25,6 +27,8 @@ const surfaceCatalogs = {
     "backup.properties.saveError": "Could not save your changes. Your edits are kept; try again."
   },
   "de": {
+    "backup.notification.finished": "Sicherung abgeschlossen",
+    "backup.notification.failed": "Sicherung fehlgeschlagen",
     "backup.surface.status": "Sicherungsfortschritt",
     "backup.surface.profiles": "Sicherungsprofile auflisten",
     "backup.surface.profile-read": "Sicherungsprofil lesen",
@@ -47,6 +51,8 @@ const surfaceCatalogs = {
     "backup.properties.saveError": "Deine Änderungen konnten nicht gespeichert werden. Sie bleiben erhalten; versuche es erneut."
   },
   "es": {
+    "backup.notification.finished": "Copia finalizada",
+    "backup.notification.failed": "Copia fallida",
     "backup.surface.status": "Progreso de copia",
     "backup.surface.profiles": "Listar perfiles de copia",
     "backup.surface.profile-read": "Leer perfil de copia",
@@ -69,6 +75,8 @@ const surfaceCatalogs = {
     "backup.properties.saveError": "No se pudieron guardar los cambios. Se conservan; inténtalo de nuevo."
   },
   "fr": {
+    "backup.notification.finished": "Sauvegarde terminée",
+    "backup.notification.failed": "Échec de la sauvegarde",
     "backup.surface.status": "Progression de la sauvegarde",
     "backup.surface.profiles": "Lister les profils de sauvegarde",
     "backup.surface.profile-read": "Lire le profil de sauvegarde",
@@ -91,6 +99,8 @@ const surfaceCatalogs = {
     "backup.properties.saveError": "Impossible d’enregistrer vos modifications. Elles sont conservées ; réessayez."
   },
   "zh-CN": {
+    "backup.notification.finished": "备份完成",
+    "backup.notification.failed": "备份失败",
     "backup.surface.status": "备份进度",
     "backup.surface.profiles": "列出备份配置",
     "backup.surface.profile-read": "读取备份配置",
