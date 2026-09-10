@@ -1,9 +1,9 @@
 {
-  "apiVersion": 4,
+  "apiVersion": 5,
   "id": "backup",
   "name": "Backup",
   "description": "Mirror configured folders through Valley's filesystem capability, with live progress and recoverable archives.",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "author": [
     "Yanik"
   ],

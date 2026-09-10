@@ -52,7 +52,6 @@
   },
   "settingsView": "backup.settings",
   "drivers": [
-    "mirror",
     "notifications"
   ],
   "guardPresets": {
@@ -175,5 +174,15 @@
     "es": "runtime/locales/es.json",
     "fr": "runtime/locales/fr.json",
     "zh-CN": "runtime/locales/zh-CN.json"
+  },
+  "runtime": {
+    "ui": "runtime/index.js",
+    "backend": "runtime/backend.js"
+  },
+  "permissions": {
+    "storage": {
+      "external": true,
+      "datasets": true
+    }
   }
 }

@@ -1,5 +1,5 @@
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
-import type { MirrorPlan } from '@valley/plugin-sdk/types'
+import type { MirrorPlan } from './types'
 
 export type Row = { source: string; destination: string; excludeText: string }
 export type Profile = {

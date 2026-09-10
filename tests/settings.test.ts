@@ -134,12 +134,11 @@ describe('Backup automation and shared drafts', () => {
     const store = createProfileStore(api)
     const operations = createBackupOperations(api, store)
     const off = registerBackupCommands(api, store, operations)
-    api.drivers.mirror.check = vi.fn(async () => ({ ok: false, error: 'Source is unavailable' }))
-    api.drivers.mirror.run = vi.fn()
+    api.backend.call = vi.fn(async () => { throw new Error('Source is unavailable') })
     try {
       expect(await api.commands.execute('backup:profile-read', { profileId: 'missing' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('not found') } })
       expect(await api.commands.execute('backup:run', { profileId: 'forest' })).toMatchObject({ ok: false, error: { message: 'Source is unavailable' } })
-      expect(api.drivers.mirror.run).not.toHaveBeenCalled()
+      expect(vi.mocked(api.backend.call).mock.calls.map(([method]) => method)).toEqual(['check'])
     } finally { off(); store.dispose() }
   })
 })
@@ -159,18 +158,19 @@ describe('Backup owns mirror plans', () => {
     expect(mirrorPlan(profile, true).retention).toEqual({ keepDays: 7, dailies: 30, weeklies: 8 })
   })
 
-  it('passes one explicit saved plan to the generic driver and retains plugin history and notification ownership', async () => {
+  it('passes one explicit saved plan to its package backend and retains plugin history and notification ownership', async () => {
     const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: { activeProfileId: 'fern', profiles: [
       { id: 'fern', name: 'Fern archive', mappings: [{ source: '/source', destination: '/destination' }] }
     ] } })
     const store = createProfileStore(api)
     const operations = createBackupOperations(api, store)
-    api.drivers.mirror.check = vi.fn(async () => ({ ok: true, data: { ok: true, issues: [] } }))
-    api.drivers.mirror.run = vi.fn(async () => ({ ok: true, data: { ok: true, mappings: 1, archived: 2, durationSec: 3, errors: 0 } }))
+    api.backend.call = vi.fn(async <T>(method: string, _payload?: unknown): Promise<T> => (method === 'check' ? { ok: true, issues: [] } : { ok: true, mappings: 1, archived: 2, durationSec: 3, errors: 0 }) as T) as typeof api.backend.call
     api.notifications.notify = vi.fn(async () => true)
     await operations.run()
-    const [checked] = vi.mocked(api.drivers.mirror.check).mock.calls[0]
-    expect(vi.mocked(api.drivers.mirror.run).mock.calls[0][0]).toBe(checked)
+    const calls = vi.mocked(api.backend.call).mock.calls
+    expect(calls.map(([method]) => method)).toEqual(['check', 'run'])
+    const checked = (calls[0][1] as { plan: unknown }).plan
+    expect((calls[1][1] as { plan: unknown }).plan).toEqual(checked)
     expect(checked).toMatchObject({ label: 'Fern archive', retention: { keepDays: 7, dailies: 30, weeklies: 8 } })
     expect(checked).not.toHaveProperty('profileId')
     expect((await operations.history()).rows[0]).toMatchObject({ profileName: 'Fern archive', archived: 2 })
