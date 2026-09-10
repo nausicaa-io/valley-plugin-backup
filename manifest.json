@@ -4,8 +4,12 @@
   "name": "Backup",
   "description": "Mirror configured folders through Valley's filesystem capability, with live progress and recoverable archives.",
   "version": "1.3.0",
-  "author": "Yanik",
-  "authorUrl": "https://github.com/yanik02",
+  "author": [
+    "Yanik"
+  ],
+  "authorUrl": [
+    "https://github.com/yanik02"
+  ],
   "isDesktopOnly": true,
   "minAppVersion": "0.1.0",
   "enabled": true,
