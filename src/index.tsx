@@ -545,7 +545,7 @@ export function register(api: ValleyPluginApi): () => void {
       h(
         'div',
         { className: 'panel-header-label' },
-        h('span', { className: 'panel-title' }, uiText('auto.dd96994d01e7'))
+        h('span', { className: 'panel-title' }, uiText('manifest.name'))
       ),
       h(
         'button',
@@ -1122,7 +1122,7 @@ export function register(api: ValleyPluginApi): () => void {
         h(
           'div',
           { className: 'settings-listpage-header' },
-          h('h4', { className: 'settings-label' }, uiText('auto.dd96994d01e7')),
+          h('h4', { className: 'settings-label' }, uiText('manifest.name')),
           h(
             Button,
             {
