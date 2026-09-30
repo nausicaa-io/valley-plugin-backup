@@ -1,0 +1,191 @@
+{
+  "icon": "icon.svg",
+  "main": "runtime/index.js",
+  "indexState": "scoped",
+  "uiSlots": {
+    "left_sidebar": "backup.panel"
+  },
+  "slotDefaults": {
+    "left_sidebar": {
+      "order": 200
+    }
+  },
+  "storageInventory": [
+    {
+      "id": "profiles",
+      "kind": "files",
+      "store": "durable",
+      "driver": "backup"
+    },
+    {
+      "id": "history",
+      "kind": "files",
+      "store": "durable",
+      "driver": "backup"
+    },
+    {
+      "id": "archives",
+      "kind": "directory",
+      "store": "external",
+      "driver": "backup"
+    },
+    {
+      "id": "logs",
+      "kind": "directory",
+      "store": "external",
+      "driver": "backup"
+    }
+  ],
+  "settingsSchema": {
+    "fields": [
+      {
+        "key": "profiles",
+        "label": "Backup profiles",
+        "type": "custom",
+        "description": "Each profile's folder pairs, schedule, archive folder and log locations.",
+        "labelKey": "auto.caa8c9ee85cb",
+        "descriptionKey": "auto.80f1eaf78461"
+      },
+      {
+        "key": "activeProfileId",
+        "label": "Active profile",
+        "type": "text",
+        "default": "",
+        "description": "Id of the profile the panel and the scheduled run use.",
+        "labelKey": "auto.d74340399e2a",
+        "descriptionKey": "auto.97bc98400c87"
+      }
+    ]
+  },
+  "settingsView": "backup.settings",
+  "drivers": [
+    "notifications"
+  ],
+  "guardPresets": {
+    "schemaVersion": 1,
+    "defaultPreset": "recommended",
+    "presets": [
+      {
+        "id": "recommended",
+        "label": "Recommended",
+        "version": 2,
+        "description": "Status reads and stopping a backup run freely; running a backup confirms first.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            },
+            "stop": {
+              "decision": "allow"
+            }
+          }
+        }
+      },
+      {
+        "id": "read-only",
+        "label": "Read-only",
+        "version": 2,
+        "description": "Status only; never run a backup.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "deny"
+            },
+            "stop": {
+              "decision": "deny"
+            }
+          }
+        }
+      },
+      {
+        "id": "blocked",
+        "label": "Blocked",
+        "version": 2,
+        "description": "No backup actions at all.",
+        "entries": {
+          "commands": {
+            "run": {
+              "decision": "deny"
+            },
+            "stop": {
+              "decision": "deny"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "provides": [
+    {
+      "id": "workspace.surface",
+      "kind": "extension",
+      "version": "1.0.0"
+    },
+    {
+      "id": "workspace.bookmark",
+      "kind": "service",
+      "version": "1.0.0"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "finished",
+      "label": "Backup finished",
+      "labelKey": "backup.notification.finished",
+      "defaultChannel": "toast",
+      "actions": [
+        "open"
+      ]
+    },
+    {
+      "id": "failed",
+      "label": "Backup failed",
+      "labelKey": "backup.notification.failed",
+      "defaultChannel": "both",
+      "actions": [
+        "open"
+      ]
+    },
+    {
+      "id": "waiting",
+      "label": "Backup waiting for drive",
+      "labelKey": "backup.notification.waiting",
+      "defaultChannel": "toast",
+      "actions": [
+        "open"
+      ]
+    }
+  ],
+  "locales": {
+    "en": "runtime/locales/en.json",
+    "de": "runtime/locales/de.json",
+    "es": "runtime/locales/es.json",
+    "fr": "runtime/locales/fr.json",
+    "zh-CN": "runtime/locales/zh-CN.json"
+  },
+  "runtime": {
+    "ui": "runtime/index.js",
+    "backend": "runtime/backend.js",
+    "backgroundOperations": [
+      "run",
+      "restoreApply",
+      "prune",
+      "check"
+    ],
+    "activation": {
+      "backend": [
+        "background",
+        "capability"
+      ]
+    }
+  },
+  "permissions": {
+    "storage": {
+      "external": true,
+      "datasets": true,
+      "restoreDatasets": true,
+      "vault": true
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "apiVersion": 5,
+  "id": "backup",
+  "name": "Backup",
+  "version": "2.1.0",
+  "description": "Mirror folders to another drive on demand or on a schedule, with live progress and recoverable archives.",
+  "author": [
+    "nausicaa"
+  ],
+  "authorUrl": [
+    "https://github.com/nausicaa-io"
+  ],
+  "license": "MIT",
+  "minAppVersion": "0.1.0",
+  "isDesktopOnly": true,
+  "enabled": true
+}
