@@ -44,7 +44,99 @@
         "type": "custom",
         "description": "Each profile's folder pairs, schedule, archive folder and log locations.",
         "labelKey": "auto.caa8c9ee85cb",
-        "descriptionKey": "auto.80f1eaf78461"
+        "descriptionKey": "auto.80f1eaf78461",
+        "schema": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "mappings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "destination": {
+                      "type": "string"
+                    },
+                    "exclude": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "source",
+                    "destination",
+                    "exclude"
+                  ]
+                }
+              },
+              "trashPath": {
+                "type": "string"
+              },
+              "logDirectory": {
+                "type": "string"
+              },
+              "masterLog": {
+                "type": "string"
+              },
+              "retention": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "off"
+                ]
+              },
+              "schedule": {
+                "type": "object",
+                "properties": {
+                  "every": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "hourly",
+                      "daily",
+                      "weekly"
+                    ]
+                  },
+                  "time": {
+                    "type": "string"
+                  },
+                  "weekday": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 6
+                  },
+                  "since": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "mappings"
+            ]
+          }
+        }
       },
       {
         "key": "activeProfileId",
@@ -178,7 +270,957 @@
         "background",
         "capability"
       ]
-    }
+    },
+    "services": [
+      {
+        "id": "command.check",
+        "version": "1.0.0",
+        "method": "check",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "check",
+            "description": "Validate backup folders and preview availability",
+            "effect": "read",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "mappings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "destination": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "exclude": {
+                            "type": "array",
+                            "maxItems": 256,
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "destination",
+                          "exclude"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "trashPath": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "logDirectory": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "masterLog": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "keepDays": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "dailies": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "weeklies": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "keepDays",
+                            "dailies",
+                            "weeklies"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "mappings",
+                    "trashPath",
+                    "logDirectory",
+                    "masterLog",
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            },
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "no-mappings",
+                          "source-missing",
+                          "drive-not-mounted",
+                          "overlap",
+                          "dest-error"
+                        ]
+                      },
+                      "mappingIndex": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "folder": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "destination": {
+                        "type": "string"
+                      },
+                      "driveRoot": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "ok",
+                "issues"
+              ],
+              "additionalProperties": false,
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      },
+      {
+        "id": "command.run",
+        "version": "1.0.0",
+        "method": "run",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "run",
+            "description": "Run a backup plan with durable run identity",
+            "effect": "execute",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "mappings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "destination": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "exclude": {
+                            "type": "array",
+                            "maxItems": 256,
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "destination",
+                          "exclude"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "trashPath": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "logDirectory": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "masterLog": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "keepDays": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "dailies": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "weeklies": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "keepDays",
+                            "dailies",
+                            "weeklies"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "mappings",
+                    "trashPath",
+                    "logDirectory",
+                    "masterLog",
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                },
+                "identity": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "profileName": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "trigger": {
+                      "enum": [
+                        "manual",
+                        "scheduled",
+                        "automation"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "startedAt",
+                    "profileId",
+                    "profileName",
+                    "trigger"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "plan",
+                "identity"
+              ],
+              "additionalProperties": false
+            },
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "cancelled": {
+                  "type": "boolean"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "mappings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "archived": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "copied": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "durationSec": {
+                  "type": "number"
+                },
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "failedItems": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "message": {
+                  "type": "string"
+                },
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "no-mappings",
+                          "source-missing",
+                          "drive-not-mounted",
+                          "overlap",
+                          "dest-error"
+                        ]
+                      },
+                      "mappingIndex": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "folder": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "destination": {
+                        "type": "string"
+                      },
+                      "driveRoot": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "ok",
+                "mappings",
+                "archived",
+                "durationSec",
+                "errors"
+              ],
+              "additionalProperties": false,
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      },
+      {
+        "id": "command.prune",
+        "version": "1.0.0",
+        "method": "prune",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "prune",
+            "description": "Prune backup archives; dryRun previews only",
+            "effect": "execute",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "mappings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "destination": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "exclude": {
+                            "type": "array",
+                            "maxItems": 256,
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "destination",
+                          "exclude"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "trashPath": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "logDirectory": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "masterLog": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "keepDays": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "dailies": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "weeklies": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "keepDays",
+                            "dailies",
+                            "weeklies"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "mappings",
+                    "trashPath",
+                    "logDirectory",
+                    "masterLog",
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                },
+                "dryRun": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "additionalProperties": false
+            },
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "cancelled": {
+                  "type": "boolean"
+                },
+                "scanned": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "kept": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "dropped": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "dir": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "dir",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "scanned",
+                "kept",
+                "dropped",
+                "errors"
+              ],
+              "additionalProperties": false,
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      },
+      {
+        "id": "command.restorePlan",
+        "version": "1.0.0",
+        "method": "restorePlan",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "restorePlan",
+            "description": "Preview restoring a backup folder mapping",
+            "effect": "read",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "mappings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "destination": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "exclude": {
+                            "type": "array",
+                            "maxItems": 256,
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "destination",
+                          "exclude"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "trashPath": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "logDirectory": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "masterLog": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "keepDays": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "dailies": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "weeklies": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "keepDays",
+                            "dailies",
+                            "weeklies"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "mappings",
+                    "trashPath",
+                    "logDirectory",
+                    "masterLog",
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                },
+                "mappingIndex": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "plan",
+                "mappingIndex"
+              ],
+              "additionalProperties": false
+            },
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "creates": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "updates": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "deletes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skipped": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "message": {
+                  "type": "string"
+                },
+                "cancelled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok",
+                "creates",
+                "updates",
+                "deletes"
+              ],
+              "additionalProperties": false,
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      },
+      {
+        "id": "command.restoreApply",
+        "version": "1.0.0",
+        "method": "restoreApply",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "restoreApply",
+            "description": "Restore a backup folder mapping with recoverable escrow",
+            "effect": "execute",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "plan": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "mappings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "destination": {
+                            "type": "string",
+                            "maxLength": 4096,
+                            "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                          },
+                          "exclude": {
+                            "type": "array",
+                            "maxItems": 256,
+                            "items": {
+                              "type": "string",
+                              "maxLength": 1024
+                            }
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "destination",
+                          "exclude"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "trashPath": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "logDirectory": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "masterLog": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "retention": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "keepDays": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "dailies": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "weeklies": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "keepDays",
+                            "dailies",
+                            "weeklies"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "mappings",
+                    "trashPath",
+                    "logDirectory",
+                    "masterLog",
+                    "retention"
+                  ],
+                  "additionalProperties": false
+                },
+                "mappingIndex": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "plan",
+                "mappingIndex"
+              ],
+              "additionalProperties": false
+            },
+            "outputSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "creates": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "updates": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "deletes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "skipped": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "message": {
+                  "type": "string"
+                },
+                "cancelled": {
+                  "type": "boolean"
+                },
+                "escrowDir": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ok",
+                "creates",
+                "updates",
+                "deletes",
+                "escrowDir"
+              ],
+              "additionalProperties": false,
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      }
+    ]
   },
   "permissions": {
     "storage": {

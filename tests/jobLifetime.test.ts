@@ -1,3 +1,5 @@
+import Ajv from 'ajv'
+import config from '../config.json'
 import { createHistoryStore } from '../src/history'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as filesystem } from 'node:fs'
@@ -15,6 +17,8 @@ import { backupApi } from '../src/backupApi'
 import { createBackupOperations } from '../src/commands'
 import { createProfileStore } from '../src/profiles'
 import { mirrorFixture } from './mirrorFixture'
+
+const outputSchemas = new Map(config.runtime.services.map(service => [service.method, new Ajv({ strict: false, strictSchema: true, allErrors: true, validateFormats: false, allowUnionTypes: true, ownProperties: true }).compile(service.metadata.command.outputSchema)]))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -34,6 +38,9 @@ function storageMock() {
     close: vi.fn(async () => {}),
     stat: vi.fn(async () => ({ name: 'fixture', kind: 'directory' as const, size: 0, mtimeMs: 0 })),
     list: vi.fn(async () => []), read: vi.fn(async () => ''),
+    readDocument: vi.fn(async () => { throw new Error('Unused fixture operation') }),
+    writeDocument: vi.fn(async () => { throw new Error('Unused fixture operation') }),
+    writeDocuments: vi.fn(async () => { throw new Error('Unused fixture operation') }),
     readBytes: vi.fn(async () => ({ base64: '', nextOffset: 0, done: true })),
     importFile: vi.fn(async () => {}), exportFile: vi.fn(async () => { throw new Error('Unused fixture operation') }),
     writeBytes: vi.fn(async () => {}),
@@ -65,12 +72,22 @@ function backend(storage = storageMock()) {
   const dispose = register(api)
   const context = (controller = new AbortController()): PluginBackendOperationContext => ({ id: crypto.randomUUID(), cancellation: controller.signal, api: { ...api, storage, rpc: { emit } } })
   return { api, storage, ambient, emit, handlers, operations, context, dispose,
-    invoke: async (method: string, payload?: unknown, owner = context()) => operations.has(method) ? operations.get(method)!(payload, owner) : handlers.get(method)!(payload) }
+    invoke: async (method: string, payload?: unknown, owner = context()) => { const result = await (operations.has(method) ? operations.get(method)!(payload, owner) : handlers.get(method)!(payload)); const validate = outputSchemas.get(method); if (validate) expect(validate(result), JSON.stringify(validate.errors)).toBe(true); return result } }
 }
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('bounded backup job ownership', () => {
+  it('validates all command result shapes against the actual mocked-storage backend', async () => {
+    const owned = backend()
+    try {
+      for (const method of ['check', 'prune', 'restorePlan', 'restoreApply', 'run']) {
+        await owned.invoke(method, { plan: plan(), ...(method === 'run' ? { identity: runIdentity() } : method === 'prune' ? { dryRun: true } : method.startsWith('restore') ? { mappingIndex: 0 } : {}) })
+        expect(outputSchemas.get(method)!({}), method).toBe(false)
+      }
+    } finally { await owned.dispose() }
+  })
+
   it('rejects cancellation before dispatch and bounds retained accepted jobs', async () => {
     const jobs = new MirrorJobs()
     const controller = new AbortController()
