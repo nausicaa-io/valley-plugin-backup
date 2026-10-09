@@ -270,7 +270,7 @@ describe('Backup automation and shared drafts', () => {
     api.backend.callOperation = vi.fn(async () => { throw new Error('Source is unavailable') })
     try {
       expect(await api.commands.execute('backup:profile-read', { profileId: 'missing' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('not found') } })
-      expect(await api.commands.execute('backup:run', { profileId: 'forest' })).toMatchObject({ ok: false, error: { message: 'Source is unavailable' } })
+      expect(await api.commands.execute('backup:profile-run', { profileId: 'forest' })).toMatchObject({ ok: false, error: { message: 'Source is unavailable' } })
       expect(vi.mocked(api.backend.callOperation).mock.calls.map(([method]) => method)).toEqual(['check'])
     } finally { off(); store.dispose() }
   })

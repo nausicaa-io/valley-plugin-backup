@@ -1,3 +1,4 @@
+import { createWorkflowAdapter } from './workflow'
 import { initBackendLocalization, t } from './localization'
 import type { PluginBackendApi, PluginBackendOperationContext } from '@valley/plugin-sdk'
 import { z } from 'zod'
@@ -22,6 +23,12 @@ const planSchema = z.object({
 const input = z.object({ plan: planSchema }).strict()
 const identitySchema = z.object({ id: z.string().min(1).max(256), startedAt: z.string().datetime(), profileId: z.string().min(1).max(256), profileName: z.string().max(256), trigger: z.enum(['manual', 'scheduled', 'automation']) }).strict()
 const runInput = input.extend({ identity: identitySchema })
+/** A payload the schema refuses is rejected before any grant, write or history row: a known no-effect outcome. */
+function parse<T extends z.ZodTypeAny>(schema: T, raw: unknown): z.infer<T> {
+  const parsed = schema.safeParse(raw)
+  if (!parsed.success) throw Object.assign(parsed.error, { code: 'BACKUP_INVALID_INPUT', outcome: 'not-applied', fatal: true, transient: false, retryable: false })
+  return parsed.data
+}
 
 /** Log lines leave the sandbox in batches: one event per copied file would
  *  flood the channel on a large tree. */
@@ -46,9 +53,13 @@ function streamLines(signal: AbortSignal, ownedApi: PluginBackendOperationContex
 }
 
 export function register(api: PluginBackendApi): () => Promise<void> {
+  const workflow = createWorkflowAdapter(api, { readiness: (nodeId, context) => nodeId === 'profile.list' || parseProfiles((context?.api ?? api).settings.get()).some(profile => profile.rows.some(row => row.source && row.destination)) ? { state: 'Available' } : { state: 'Unconfigured', reason: 'Configure a saved source/destination profile in Backup settings.' } })
   const offLocalization = initBackendLocalization(api.i18n)
   const jobs = new MirrorJobs()
   let busy = false
+  let activeRun: AbortController | undefined
+  /** The run in flight, whoever started it: this backend owns the truth backup:status reports. */
+  let runStatus: { profileId: string | null; progress: { update: unknown } | null } | undefined
   let disposal: Promise<void> | undefined
   const dispatched = new WeakSet<PluginBackendOperationContext>()
   const subscriptions: Array<() => void> = []
@@ -58,8 +69,17 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       if (busy && !['check', 'reveal'].includes(method)) throw new Error(t('backend.busy'))
       const exclusive = !['check', 'reveal'].includes(method)
       if (exclusive) busy = true
+      const stopper = method === 'run' ? new AbortController() : undefined
+      const forward = (): void => stopper?.abort()
+      if (stopper) {
+        if (cancellation?.aborted) stopper.abort()
+        else cancellation?.addEventListener('abort', forward, { once: true })
+        activeRun = stopper
+        const parsed = runInput.safeParse(payload)
+        runStatus = parsed.success ? { profileId: parsed.data.identity.profileId, progress: null } : undefined
+      }
       try {
-        return await jobs.run(cancellation, async (signal) => {
+        return await jobs.run(stopper?.signal ?? cancellation, async (signal) => {
           const storage = createStorageSession(ownedApi.storage, signal)
           let value: unknown
           let failure: unknown
@@ -96,10 +116,14 @@ export function register(api: PluginBackendApi): () => Promise<void> {
           return value
         })
       } finally {
+        if (stopper) {
+          cancellation?.removeEventListener('abort', forward)
+          if (activeRun === stopper) { activeRun = undefined; runStatus = undefined }
+        }
         if (exclusive) busy = false
       }
     }
-    subscriptions.push(method === 'reveal' ? api.rpc.handle(method, raw => execute(raw, api)) : api.rpc.handleOperation(method, (raw, context) => {
+    subscriptions.push(method === 'reveal' ? api.rpc.handle(method, raw => execute(raw, api)) : workflow.operation(method, (raw, context) => {
       if (!context || typeof context.id !== 'string' || !context.id || context.id.length > 128
         || typeof context.cancellation?.aborted !== 'boolean' || typeof context.cancellation.addEventListener !== 'function' || typeof context.cancellation.removeEventListener !== 'function'
         || context.api?.pluginId !== api.pluginId || typeof context.api?.storage?.open !== 'function' || typeof context.api.storage.close !== 'function' || typeof context.api.rpc?.emit !== 'function') {
@@ -110,26 +134,27 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       return execute(raw, context.api, context.cancellation)
     }))
   }
-  register('check', async (raw, storage) => { const { plan } = input.parse(raw); await storage.authorizePlan(plan, 'check'); return createMirrorService(storage).checkMirror(plan) })
+  register('check', async (raw, storage) => { const { plan } = parse(input, raw); await storage.authorizePlan(plan, 'check'); return createMirrorService(storage).checkMirror(plan) })
   register('run', async (raw, storage, signal, ownedApi) => {
-    const { plan, identity } = runInput.parse(raw)
+    const { plan, identity } = parse(runInput, raw)
     await storage.authorizePlan(plan, 'run')
     await createHistoryStore(ownedApi).insert({ ...identity, durationSec: 0, archived: 0, copied: 0, errors: 0, failedItems: 0, ok: false, reason: 'interrupted' })
     const lines = streamLines(signal, ownedApi)
+    const status = runStatus
     const emit = (progress: unknown): void => { if (!signal.aborted) ownedApi.rpc.emit('progress', progress) }
     try {
-      return await createMirrorService(storage).runMirror(plan, lines.push, (update) => { lines.flush(); emit({ update }) }, (mapping) => { lines.flush(); emit({ mapping }) })
+      return await createMirrorService(storage).runMirror(plan, lines.push, (update) => { lines.flush(); if (status && status === runStatus && !signal.aborted) status.progress = { update }; emit({ update }) }, (mapping) => { lines.flush(); emit({ mapping }) })
     } finally { lines.flush() }
   })
   register('prune', async (raw, storage) => {
-    const { plan, dryRun } = input.extend({ dryRun: z.boolean().optional() }).parse(raw)
+    const { plan, dryRun } = parse(input.extend({ dryRun: z.boolean().optional() }), raw)
     await storage.authorizePlan(plan, dryRun ? 'check' : 'prune')
     return createMirrorService(storage).pruneMirrorArchives(plan, { dryRun })
   })
   for (const method of ['restorePlan', 'restoreApply'] as const) register(method, async (raw, storage, signal, ownedApi) => {
-    const { plan, mappingIndex } = input.extend({ mappingIndex: z.number().int().nonnegative() }).parse(raw)
+    const { plan, mappingIndex } = parse(input.extend({ mappingIndex: z.number().int().nonnegative() }), raw)
     const mapping = plan.mappings[mappingIndex]
-    if (!mapping) throw new Error(t('backend.mapping'))
+    if (!mapping) throw Object.assign(new Error(t('backend.mapping')), { code: 'BACKUP_INVALID_INPUT', outcome: 'not-applied', fatal: true, transient: false, retryable: false })
     await storage.authorizePlan(plan, method)
     const escrowDir = join(plan.trashPath || join(mapping.destination, ARCHIVE_DIR), `restore-${mirrorTimestamp()}`)
     const lines = streamLines(signal, ownedApi)
@@ -138,7 +163,26 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       return method === 'restoreApply' ? { ...result, escrowDir } : result
     } finally { lines.flush() }
   })
-  register('reveal', async (raw, storage) => { const { plan, path } = input.extend({ path: absolute }).parse(raw); await storage.authorizePlan(plan, 'reveal'); await storage.revealStorage(path); return true })
+  subscriptions.push(api.rpc.handle('stop', () => {
+    if (!activeRun || activeRun.signal.aborted) return false
+    activeRun.abort()
+    return true
+  }))
+  subscriptions.push(api.rpc.handle('run.status', () => runStatus ? { running: true, profileId: runStatus.profileId, progress: runStatus.progress } : { running: false, profileId: null, progress: null }))
+  register('reveal', async (raw, storage) => { const { plan, path } = parse(input.extend({ path: absolute }), raw); await storage.authorizePlan(plan, 'reveal'); await storage.revealStorage(path); return true })
+  for (const method of ['list', 'check', 'run', 'prune', 'restorePlan', 'restoreApply'] as const) subscriptions.push(workflow.local(`workflow.profile.${method}`, async (raw, context) => {
+    context.cancellation.throwIfAborted()
+    const profiles = parseProfiles(context.api.settings.get())
+    if (method === 'list') return { profiles: profiles.map(profile => ({ id: profile.id, name: profile.name })) }
+    const value = raw as { profileId: string; mappingIndex?: number; dryRun?: boolean }
+    const profile = profiles.find(entry => entry.id === value.profileId)
+    if (!profile) throw Object.assign(new Error('Saved Backup profile is unavailable'), { code: 'PROVIDER_UNCONFIGURED', fatal: true, transient: false, retryable: false })
+    const plan = mirrorPlan(profile)
+    const input = method === 'run' ? { plan, identity: { id: context.id, startedAt: new Date().toISOString(), profileId: profile.id, profileName: profile.name, trigger: 'automation' } }
+      : method === 'prune' ? { plan, dryRun: value.dryRun ?? true }
+      : method === 'restorePlan' || method === 'restoreApply' ? { plan, mappingIndex: value.mappingIndex } : { plan }
+    return workflow.run(method, input, context)
+  }))
   let polling: Promise<void> | undefined
   let closed = false
   const statuses: Record<string, { nextAt: number | null; waiting: string | null }> = {}
@@ -176,6 +220,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   return () => {
     if (disposal) return disposal
     closed = true
+    workflow.dispose()
     clearInterval(interval)
     const failures: unknown[] = []
     for (const unsubscribe of subscriptions) { try { unsubscribe() } catch (error) { failures.push(error) } }

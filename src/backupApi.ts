@@ -23,6 +23,8 @@ export function backupApi(api: ValleyPluginApi) {
     restorePlan: (plan: MirrorPlan, mappingIndex: number, signal?: AbortSignal) => operation<RestoreOutcome & { escrowDir?: string }>('restorePlan', plan, { mappingIndex }, signal),
     restoreApply: (plan: MirrorPlan, mappingIndex: number, signal?: AbortSignal) => operation<RestoreOutcome & { escrowDir?: string }>('restoreApply', plan, { mappingIndex }, signal),
     reveal: (plan: MirrorPlan, path: string) => call<boolean>('reveal', { plan, path }),
+    stop: () => call<boolean>('stop', {}),
+    status: async () => { const result = await call<unknown>('run.status', {}); if (!result.ok) throw new Error(result.error); return result.data },
     onProgress: (listener: (progress: MirrorProgress) => void) => api.backend.on('progress', (value) => listener(value as MirrorProgress))
   }
 }

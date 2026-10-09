@@ -39,3 +39,9 @@ Backup owns its copy, restore, retention, history, and translation logic. Its sa
 Use Node 24.19.0 and npm 11.17.0. Run `npm ci` and `npm run check` in this directory. The package owns its dependencies, tests, localization, and vendored SDK/tool/testkit archives; no Valley app checkout is required. `npm run check` validates imports, types, tests, and builds `runtime/index.js`. Commit rebuilt runtime files with source changes.
 
 The package owns `locales/en.json`, `de.json`, `es.json`, `fr.json`, and `zh-CN.json`. Identity translations use `manifest.name` and `manifest.description`, including while disabled; fallback stays within the package’s English catalog. Authors and their URLs are paired arrays.
+
+## Workflow integration
+
+The backend explicitly registers its supported blocks through `registerWorkflowContribution`. Workflow calls the owning operations with their original authentication, cancellation, grants, revisions, and receipts. The catalogue publishes Draft-07 parameter and port contracts; credential administration and approval bypasses are excluded. Workflow availability is configured separately in Workflow → Plugins. Existing account, connection, and profile settings remain owned by this plugin.
+
+Workflow output collections are explicit: `profile.list` → `$.profiles`, `profile.check` → `$.issues`. Selectors are relative to each execution item’s `json`. Profile checking deliberately exposes its complete findings array. Run receipts, prune results and restore plans contain optional or competing issues, dropped paths, errors, creates, updates, deletes and skipped paths, so they have no collection selector.

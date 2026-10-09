@@ -160,16 +160,36 @@
       {
         "id": "recommended",
         "label": "Recommended",
-        "version": 2,
-        "description": "Status reads and stopping a backup run freely; running a backup confirms first.",
+        "version": 4,
+        "description": "Status reads and stopping a backup run freely; running a backup, restoring or applying retention confirms first.",
         "entries": {
           "commands": {
             "run": {
               "decision": "confirm",
               "allowPreApproval": false
             },
+            "profile-run": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            },
+            "profile-prune": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            },
+            "prune": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            },
             "stop": {
               "decision": "allow"
+            },
+            "restore": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            },
+            "restoreApply": {
+              "decision": "confirm",
+              "allowPreApproval": false
             }
           }
         }
@@ -177,14 +197,38 @@
       {
         "id": "read-only",
         "label": "Read-only",
-        "version": 2,
-        "description": "Status only; never run a backup.",
+        "version": 4,
+        "description": "Status only; never run, restore, prune or edit backup profiles.",
         "entries": {
           "commands": {
             "run": {
               "decision": "deny"
             },
+            "profile-run": {
+              "decision": "deny"
+            },
+            "profile-prune": {
+              "decision": "deny"
+            },
+            "prune": {
+              "decision": "deny"
+            },
             "stop": {
+              "decision": "deny"
+            },
+            "restore": {
+              "decision": "deny"
+            },
+            "restoreApply": {
+              "decision": "deny"
+            },
+            "profile-create": {
+              "decision": "deny"
+            },
+            "profile-update": {
+              "decision": "deny"
+            },
+            "profile-delete": {
               "decision": "deny"
             }
           }
@@ -193,14 +237,65 @@
       {
         "id": "blocked",
         "label": "Blocked",
-        "version": 2,
+        "version": 4,
         "description": "No backup actions at all.",
         "entries": {
           "commands": {
             "run": {
               "decision": "deny"
             },
+            "profile-run": {
+              "decision": "deny"
+            },
+            "profile-prune": {
+              "decision": "deny"
+            },
+            "prune": {
+              "decision": "deny"
+            },
             "stop": {
+              "decision": "deny"
+            },
+            "restore": {
+              "decision": "deny"
+            },
+            "restoreApply": {
+              "decision": "deny"
+            },
+            "profile-create": {
+              "decision": "deny"
+            },
+            "profile-update": {
+              "decision": "deny"
+            },
+            "profile-delete": {
+              "decision": "deny"
+            },
+            "status": {
+              "decision": "deny"
+            },
+            "profiles": {
+              "decision": "deny"
+            },
+            "profile-read": {
+              "decision": "deny"
+            },
+            "history": {
+              "decision": "deny"
+            },
+            "check": {
+              "decision": "deny"
+            },
+            "profile-check": {
+              "decision": "deny"
+            },
+            "prune-preview": {
+              "decision": "deny"
+            },
+            "restore-preview": {
+              "decision": "deny"
+            },
+            "restorePlan": {
               "decision": "deny"
             }
           }
@@ -1219,7 +1314,1017 @@
             }
           }
         }
+      },
+      {
+        "id": "workflow.provider",
+        "version": "1.0.0",
+        "method": "workflow.execute",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "workflow": {
+            "providerId": "backup",
+            "providerVersion": "1.0.0",
+            "nodes": [
+              {
+                "id": "profile.list",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "list saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "read",
+                "idempotent": true,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "profiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "profiles"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    },
+                    "collection": {
+                      "selector": "$.profiles"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "profiles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "profiles"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "profile.check",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "check saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "read",
+                "idempotent": true,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "issues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "no-mappings",
+                                  "source-missing",
+                                  "drive-not-mounted",
+                                  "overlap",
+                                  "dest-error"
+                                ]
+                              },
+                              "mappingIndex": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "folder": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "type": "string"
+                              },
+                              "destination": {
+                                "type": "string"
+                              },
+                              "driveRoot": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "issues"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    },
+                    "collection": {
+                      "selector": "$.issues"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string",
+                      "title": "Saved profile ID",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "ui": {
+                        "control": "text"
+                      }
+                    }
+                  },
+                  "required": [
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "no-mappings",
+                              "source-missing",
+                              "drive-not-mounted",
+                              "overlap",
+                              "dest-error"
+                            ]
+                          },
+                          "mappingIndex": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "folder": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "destination": {
+                            "type": "string"
+                          },
+                          "driveRoot": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "issues"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "profile.run",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "run saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "execute",
+                "idempotent": false,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "cancelled": {
+                          "type": "boolean"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "mappings": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "archived": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "copied": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "durationSec": {
+                          "type": "number"
+                        },
+                        "errors": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "failedItems": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "issues": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "no-mappings",
+                                  "source-missing",
+                                  "drive-not-mounted",
+                                  "overlap",
+                                  "dest-error"
+                                ]
+                              },
+                              "mappingIndex": {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              "folder": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "type": "string"
+                              },
+                              "destination": {
+                                "type": "string"
+                              },
+                              "driveRoot": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "mappings",
+                        "archived",
+                        "durationSec",
+                        "errors"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string",
+                      "title": "Saved profile ID",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "ui": {
+                        "control": "text"
+                      }
+                    }
+                  },
+                  "required": [
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "cancelled": {
+                      "type": "boolean"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "mappings": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "archived": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "copied": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "durationSec": {
+                      "type": "number"
+                    },
+                    "errors": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "failedItems": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "no-mappings",
+                              "source-missing",
+                              "drive-not-mounted",
+                              "overlap",
+                              "dest-error"
+                            ]
+                          },
+                          "mappingIndex": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "folder": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "destination": {
+                            "type": "string"
+                          },
+                          "driveRoot": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "mappings",
+                    "archived",
+                    "durationSec",
+                    "errors"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "profile.prune",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "prune saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "execute",
+                "idempotent": false,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "cancelled": {
+                          "type": "boolean"
+                        },
+                        "scanned": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "kept": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "dropped": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "errors": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "dir": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "dir",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "scanned",
+                        "kept",
+                        "dropped",
+                        "errors"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string",
+                      "title": "Saved profile ID",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "dryRun": {
+                      "type": "boolean",
+                      "title": "Preview only",
+                      "default": true
+                    }
+                  },
+                  "required": [
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "cancelled": {
+                      "type": "boolean"
+                    },
+                    "scanned": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "kept": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "dropped": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "dir": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "dir",
+                          "message"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "scanned",
+                    "kept",
+                    "dropped",
+                    "errors"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "profile.restorePlan",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "restorePlan saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "read",
+                "idempotent": true,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "creates": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "updates": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "deletes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "skipped": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "cancelled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "creates",
+                        "updates",
+                        "deletes"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string",
+                      "title": "Saved profile ID",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "mappingIndex": {
+                      "type": "integer",
+                      "title": "Folder mapping index",
+                      "minimum": 0,
+                      "ui": {
+                        "control": "number",
+                        "step": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "profileId",
+                    "mappingIndex"
+                  ],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "creates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deletes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "cancelled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "creates",
+                    "updates",
+                    "deletes"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "profile.restoreApply",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "restoreApply saved backup profile",
+                "description": "Uses an existing Backup profile and its approved folder grants. Raw storage paths and credential administration are excluded.",
+                "effect": "execute",
+                "idempotent": false,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Backup result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "creates": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "updates": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "deletes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "skipped": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "cancelled": {
+                          "type": "boolean"
+                        },
+                        "escrowDir": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "creates",
+                        "updates",
+                        "deletes",
+                        "escrowDir"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "$schema": "http://json-schema.org/draft-07/schema#",
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string",
+                      "title": "Saved profile ID",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "mappingIndex": {
+                      "type": "integer",
+                      "title": "Folder mapping index",
+                      "minimum": 0,
+                      "ui": {
+                        "control": "number",
+                        "step": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "profileId",
+                    "mappingIndex"
+                  ],
+                  "additionalProperties": false
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "creates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deletes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "cancelled": {
+                      "type": "boolean"
+                    },
+                    "escrowDir": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "creates",
+                    "updates",
+                    "deletes",
+                    "escrowDir"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "workflow.catalog",
+        "version": "1.0.0",
+        "method": "workflow.catalog",
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "operation": true
       }
+    ],
+    "largeDataOperations": [
+      "workflow.execute"
     ]
   },
   "permissions": {
@@ -1228,6 +2333,7 @@
       "datasets": true,
       "restoreDatasets": true,
       "vault": true
-    }
+    },
+    "largeData": true
   }
 }

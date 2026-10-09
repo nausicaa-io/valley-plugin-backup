@@ -18,7 +18,7 @@ import { createBackupOperations } from '../src/commands'
 import { createProfileStore } from '../src/profiles'
 import { mirrorFixture } from './mirrorFixture'
 
-const outputSchemas = new Map(config.runtime.services.map(service => [service.method, new Ajv({ strict: false, strictSchema: true, allErrors: true, validateFormats: false, allowUnionTypes: true, ownProperties: true }).compile(service.metadata.command.outputSchema)]))
+const outputSchemas = new Map(config.runtime.services.flatMap(service => service.metadata?.command ? [[service.method, new Ajv({ strict: false, strictSchema: true, allErrors: true, validateFormats: false, allowUnionTypes: true, ownProperties: true }).compile(service.metadata.command.outputSchema)]] : []))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -196,10 +196,20 @@ describe('bounded backup job ownership', () => {
     expect(owned.storage.open).not.toHaveBeenCalled()
   })
 
+  it('refuses a malformed run payload as a known no-effect outcome before any grant or history row', async () => {
+    const owned = backend()
+    await expect(owned.invoke('run', { plan: plan() })).rejects.toMatchObject({ code: 'BACKUP_INVALID_INPUT', outcome: 'not-applied' })
+    await expect(owned.invoke('restoreApply', { plan: plan(), mappingIndex: 4 })).rejects.toMatchObject({ code: 'BACKUP_INVALID_INPUT', outcome: 'not-applied' })
+    expect(owned.storage.open).not.toHaveBeenCalled()
+    expect((await createHistoryStore(owned.api).query(200)).rows).toEqual([])
+    await owned.dispose()
+  })
+
   it('registers every long operation only on the owned contract and rejects malformed or replayed contexts', async () => {
     const owned = backend()
-    expect([...owned.operations.keys()]).toEqual(['check', 'run', 'prune', 'restorePlan', 'restoreApply'])
-    expect([...owned.handlers.keys()]).toEqual(['reveal', 'schedule.snapshot'])
+    expect(owned.operations.has('workflow.catalog')).toBe(true)
+    expect([...owned.operations.keys()].filter(method => method !== 'workflow.catalog')).toEqual(['check', 'run', 'prune', 'restorePlan', 'restoreApply'])
+    expect([...owned.handlers.keys()].filter(method => !method.startsWith('workflow.'))).toEqual(['stop', 'run.status', 'reveal', 'schedule.snapshot'])
     const run = owned.operations.get('run')!
     const valid = owned.context()
     for (const invalid of [undefined, { ...valid, id: '' }, { ...valid, cancellation: {} }, { ...valid, api: { ...valid.api, pluginId: 'other' } }, { ...valid, api: {} }]) {
@@ -448,7 +458,7 @@ describe('backup frontend operation lifetime', () => {
     const operations = createBackupOperations(api, store)
     const registrations = vi.spyOn(api.commands, 'register')
     const off = registerBackupCommands(api, store, operations)
-    const command = registrations.mock.calls.find(([entry]) => entry.id === commandId)![0]
+    const command = registrations.mock.calls.find(([entry]) => entry.id === `profile-${commandId}`)![0]
     return { api, store, operations, off, command }
   }
 
@@ -526,6 +536,69 @@ describe('backup frontend operation lifetime', () => {
     expect(owned.storage.copy).not.toHaveBeenCalled()
   })
 
+  it('stops a backup started through the public run operation and records it as stopped', async () => {
+    const owned = backend()
+    const stop = owned.handlers.get('stop')!
+    expect(stop({})).toBe(false)
+    const held = deferred<Awaited<ReturnType<PluginStorageApi['list']>>>(), entered = deferred<void>()
+    vi.mocked(owned.storage.list).mockImplementationOnce(() => { entered.resolve(); return held.promise })
+    const identity = runIdentity()
+    const caller = new AbortController()
+    const task = owned.invoke('run', { plan: plan(), identity }, owned.context(caller))
+    const outcome = task.then(value => ({ value }), error => ({ error }))
+    await entered.promise
+    expect(stop({})).toBe(true)
+    expect(stop({})).toBe(false)
+    expect(caller.signal.aborted).toBe(false)
+    held.resolve([])
+    await outcome
+    expect(owned.storage.copy).not.toHaveBeenCalled()
+    expect((await createHistoryStore(owned.api).query()).rows[0]).toMatchObject({ id: identity.id, ok: false, reason: 'stopped' })
+    expect(stop({})).toBe(false)
+    expect(await owned.invoke('check', { plan: plan() })).toMatchObject({ ok: true })
+    await owned.dispose()
+  })
+
+  it('reports a public backend run in backup:status although this window did not start it', async () => {
+    const owned = backend()
+    const { backupResults } = await import('../src/commandResults')
+    const { registerBackupCommands } = await import('../src/commands')
+    const validate = new Ajv({ strict: false, allowUnionTypes: true }).compile(backupResults.status)
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: [{ id: 'fixture', name: 'Fixture', mappings: [] }] } })
+    api.backend.call = vi.fn(async (method: string, payload?: unknown) => owned.handlers.get(method)!(payload)) as typeof api.backend.call
+    const store = createProfileStore(api)
+    const operations = createBackupOperations(api, store)
+    const off = registerBackupCommands(api, store, operations)
+    const status = async () => {
+      const response = await api.commands.execute('backup:status', {})
+      if (!response.ok) throw new Error('backup:status failed')
+      expect(validate(response.value), JSON.stringify(validate.errors)).toBe(true)
+      return response.value
+    }
+    try {
+      expect(await status()).toMatchObject({ running: false, profileId: null, progress: null })
+      const held = deferred<Awaited<ReturnType<PluginStorageApi['list']>>>(), entered = deferred<void>()
+      vi.mocked(owned.storage.list).mockImplementationOnce(() => { entered.resolve(); return held.promise })
+      const task = owned.invoke('run', { plan: plan(), identity: { ...runIdentity(), profileId: 'external', profileName: 'External' } })
+      await entered.promise
+      expect(await status()).toMatchObject({ running: true, profileId: 'external', progress: { update: { folder: 'source', mappingIndex: 1, mappingCount: 1, phase: 'scanning' } } })
+      held.resolve([])
+      expect(await task).toMatchObject({ ok: true })
+      expect(await status()).toMatchObject({ running: false, profileId: null, progress: null })
+    } finally { await off(); store.dispose(); await owned.dispose() }
+  })
+
+  it('never reports a run payload that fails validation as running', async () => {
+    const owned = backend()
+    const status = owned.handlers.get('run.status')!
+    const task = owned.invoke('run', { plan: plan() })
+    expect(status({})).toEqual({ running: false, profileId: null, progress: null })
+    await expect(task).rejects.toThrow()
+    expect(status({})).toEqual({ running: false, profileId: null, progress: null })
+    expect(owned.storage.open).not.toHaveBeenCalled()
+    await owned.dispose()
+  })
+
   it('records the backend run before work and preserves its completed claim against replay', async () => {
     const owned = backend()
     const held = deferred<Awaited<ReturnType<PluginStorageApi['list']>>>(), entered = deferred<void>()
@@ -563,6 +636,47 @@ describe('backup frontend operation lifetime', () => {
     expect(notify).not.toHaveBeenCalled()
     await operations.dispose()
     store.dispose()
+  })
+
+  it('drops the finished run progress from the local status when the backend is unreachable', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: [{ id: 'fixture', name: 'Fixture', mappings: [] }] } })
+    let progressListener: ((value: unknown) => void) | undefined
+    api.backend.on = ((event: string, listener: (value: unknown) => void) => { if (event === 'progress') progressListener = listener; return () => {} }) as typeof api.backend.on
+    api.backend.call = vi.fn(async () => { throw new Error('Backend is not running') }) as typeof api.backend.call
+    const store = createProfileStore(api)
+    const operations = createBackupOperations(api, store)
+    const entered = deferred<void>(), held = deferred<unknown>()
+    api.backend.callOperation = vi.fn(async (method: string) => {
+      if (method !== 'run') return undefined
+      progressListener?.({ update: { folder: 'source', mappingIndex: 1, mappingCount: 1, phase: 'scanning' } })
+      entered.resolve()
+      return held.promise
+    }) as typeof api.backend.callOperation
+    try {
+      const task = operations.run(undefined, true)
+      await entered.promise
+      expect(await operations.status()).toMatchObject({ running: true, profileId: 'fixture', progress: { update: { phase: 'scanning' } } })
+      held.resolve(completed)
+      await task
+      expect(await operations.status()).toEqual({ running: false, profileId: null, progress: null })
+    } finally { await operations.dispose(); store.dispose() }
+  })
+
+  it('asks the backend to stop a run this window did not start', async () => {
+    const { api, store, off } = await commandFixture('run')
+    const call = vi.fn(async () => true) as typeof api.backend.call
+    api.backend.call = call
+    const callOperation = vi.spyOn(api.backend, 'callOperation')
+    try {
+      expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: true, value: { stopped: true } })
+      expect(call).toHaveBeenCalledOnce()
+      expect(call).toHaveBeenCalledWith('stop', {})
+      vi.mocked(call).mockResolvedValueOnce(false)
+      expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: true, value: { stopped: false } })
+      vi.mocked(call).mockRejectedValueOnce(new Error('Backend is not running'))
+      expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: false, error: { message: expect.stringContaining('Backend is not running') } })
+      expect(callOperation).not.toHaveBeenCalled()
+    } finally { await off(); store.dispose() }
   })
 
   it('aborts every pending standalone check and joins their accepted results independently', async () => {
@@ -700,7 +814,7 @@ describe('backup frontend operation lifetime', () => {
   })
 
   it.each([
-    ['prune-preview', 'prune', false], ['prune', 'prune', true],
+    ['prune-preview', 'prune', false], ['profile-prune', 'prune', true],
     ['restore-preview', 'restorePlan', false], ['restore', 'restoreApply', true]
   ] as const)('forwards the existing %s command scope and cancellation without replaying its accepted work', async (commandId, method, write) => {
     const { registerBackupCommands } = await import('../src/commands')

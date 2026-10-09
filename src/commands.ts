@@ -1,3 +1,4 @@
+import { commandRegistrar, backupResults } from './commandResults'
 import { backupApi } from './backupApi'
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
 import type { CommandContext } from '@valley/plugin-sdk/commands'
@@ -186,7 +187,7 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
         if (!recorded && isActive()) await notifyOutcome(selected, undefined, message)
       }
       throw error
-    } finally { disconnect(); running = false; runningProfileId = null; controller = undefined }
+    } finally { disconnect(); running = false; runningProfileId = null; latestProgress = null; controller = undefined }
   }
   const run = (profileId?: string, prechecked = false, context?: CommandContext, options?: RunOptions) => {
     const task = execute(profileId, prechecked, context, options)
@@ -201,6 +202,14 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     if (!controller || controller.signal.aborted) return false
     controller.abort()
     return true
+  }
+  /** Stop the running backup wherever it started: this window, another caller, a schedule or a workflow. */
+  const stop = async (): Promise<boolean> => {
+    if (cancel()) return true
+    if (!isActive()) throw Object.assign(new Error('Backup session is no longer active'), { code: 'BACKUP_INACTIVE', outcome: 'not-applied' })
+    const stopped = await client.stop()
+    if (!stopped.ok) throw Object.assign(new Error(`Could not reach the backup engine: ${stopped.error}. Check backup:status and backup:history before retrying.`), { code: 'BACKUP_STOP_UNAVAILABLE', outcome: 'unknown' })
+    return stopped.data === true
   }
   function dispose(): Promise<void> {
     if (disposal) return disposal
@@ -237,7 +246,19 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const [next] = parseProfiles({ profiles: [{ ...current, ...patch }] })
     return replace(before.map((item) => item.id === selected.id ? next : item), before)
   }
-  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, check, run, cancel, replace, update, isActive, assertActive, status: () => ({ running, profileId: runningProfileId, progress: latestProgress }), dispose }
+  type RunStatus = { running: boolean; profileId: string | null; progress: MirrorProgress | null }
+  /** The backend owns every run (this window's, another caller's, a schedule's or a workflow's); the local fields cover this window's precheck and an unreachable backend. */
+  const status = async (): Promise<RunStatus> => {
+    const local: RunStatus = { running, profileId: runningProfileId, progress: latestProgress }
+    let remote: unknown
+    try { remote = await client.status() } catch { return local }
+    if (!remote || typeof remote !== 'object') return local
+    const value = remote as Record<string, unknown>
+    if (value.running !== true) return local
+    const progress = value.progress && typeof value.progress === 'object' && !Array.isArray(value.progress) ? value.progress as MirrorProgress : null
+    return { running: true, profileId: typeof value.profileId === 'string' ? value.profileId : local.profileId, progress: progress ?? (running ? local.progress : null) }
+  }
+  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, check, run, cancel, stop, replace, update, isActive, assertActive, status, dispose }
 }
 
 export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore, operations: ReturnType<typeof createBackupOperations>, schedules: () => unknown = () => ({})): () => Promise<void> {
@@ -263,11 +284,11 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
     }
   }
   const off = [
-    api.commands.register({ id: 'status', label: 'Backup progress', labelKey: 'backup.surface.status', sideEffect: 'read', paletteSafe: false, run: () => ({ ...operations.status(), schedules: schedules() }) }),
-    api.commands.register({ id: 'stop', label: 'Stop backup', labelKey: 'backup.surface.stop', sideEffect: 'write', paletteSafe: false, run: () => ({ value: { stopped: operations.cancel() }, revert: null }) }),
-    api.commands.register({ id: 'profiles', label: 'List backup profiles', labelKey: 'backup.surface.profiles', paletteSafe: false, sideEffect: 'read', run: () => store.getSnapshot().map(serializeProfile) }),
-    api.commands.register({ id: 'profile-read', label: 'Read backup profile', labelKey: 'backup.surface.profile-read', paletteSafe: false, sideEffect: 'read', input: targetInput, run: ({ profileId }) => serializeProfile(operations.profile(profileId)) }),
-    api.commands.register({ id: 'profile-create', label: 'Create backup profile', labelKey: 'backup.surface.profile-create', paletteSafe: false, sideEffect: 'write',
+    commandRegistrar(api)({ id: 'status', outputSchema: backupResults['status'], label: 'Backup progress', labelKey: 'backup.surface.status', sideEffect: 'read', paletteSafe: false, run: async () => ({ ...(await operations.status()), schedules: schedules() }) }),
+    commandRegistrar(api)({ id: 'stop', outputSchema: backupResults['stop'], label: 'Stop backup', labelKey: 'backup.surface.stop', sideEffect: 'write', paletteSafe: false, run: async () => ({ value: { stopped: await operations.stop() }, revert: null }) }),
+    commandRegistrar(api)({ id: 'profiles', outputSchema: backupResults['profiles'], label: 'List backup profiles', labelKey: 'backup.surface.profiles', paletteSafe: false, sideEffect: 'read', run: () => store.getSnapshot().map(serializeProfile) }),
+    commandRegistrar(api)({ id: 'profile-read', outputSchema: backupResults['profile-read'], label: 'Read backup profile', labelKey: 'backup.surface.profile-read', paletteSafe: false, sideEffect: 'read', input: targetInput, run: ({ profileId }) => serializeProfile(operations.profile(profileId)) }),
+    commandRegistrar(api)({ id: 'profile-create', outputSchema: backupResults['profile-create'], label: 'Create backup profile', labelKey: 'backup.surface.profile-create', paletteSafe: false, sideEffect: 'write',
       input: { schema: { type: 'object', properties: profileFields, required: ['name'], additionalProperties: false }, parse: (raw) => { const value = profilePatch(raw); if (typeof value.name !== 'string') throw new Error('name is required'); return value } },
       revision: () => store.getSnapshot().map(serializeProfile), preview: (values) => ({ action: 'create-profile', values }),
       run: async (values) => {
@@ -277,34 +298,35 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
         return operations.replace([...before, ...next], before)
       }
     }),
-    api.commands.register({ id: 'profile-update', label: 'Update backup profile', labelKey: 'backup.surface.profile-update', paletteSafe: false, sideEffect: 'write',
+    commandRegistrar(api)({ id: 'profile-update', outputSchema: backupResults['profile-update'], label: 'Update backup profile', labelKey: 'backup.surface.profile-update', paletteSafe: false, sideEffect: 'write',
       input: { schema: { type: 'object', properties: { profileId: { type: 'string' }, values: { type: 'object', properties: profileFields, additionalProperties: false } }, required: ['profileId', 'values'], additionalProperties: false }, parse: (raw) => { const selected = target(raw); if (!selected.profileId) throw new Error('profileId is required'); return { profileId: selected.profileId, values: profilePatch(object(raw).values) } } },
       revision: (input) => profileRevision(input), preview: (input) => input, run: ({ profileId, values }) => operations.update(profileId, values)
     }),
-    api.commands.register({ id: 'profile-delete', label: 'Delete backup profile', labelKey: 'backup.surface.profile-delete', paletteSafe: false, sideEffect: 'write', input: targetInput,
+    commandRegistrar(api)({ id: 'profile-delete', outputSchema: backupResults['profile-delete'], label: 'Delete backup profile', labelKey: 'backup.surface.profile-delete', paletteSafe: false, sideEffect: 'write', input: targetInput,
       revision: profileRevision, preview: ({ profileId }) => ({ action: 'delete-profile', profile: serializeProfile(operations.profile(profileId)) }),
       run: async ({ profileId }) => { const selected = operations.profile(profileId); const before = store.getSnapshot(); return operations.replace(before.filter((item) => item.id !== selected.id), before) }
     }),
-    api.commands.register({ id: 'check', label: 'Check backup profile', labelKey: 'backup.surface.check', paletteSafe: false, sideEffect: 'read', input: targetInput, run: async ({ profileId }, context) => {
+    // The backend services in config.json own the plan-based check/run/prune IDs; the profile forms keep distinct IDs so neither shadows the other.
+    commandRegistrar(api)({ id: 'profile-check', outputSchema: backupResults['check'], label: 'Check backup profile', labelKey: 'backup.surface.check', paletteSafe: false, sideEffect: 'read', input: targetInput, run: async ({ profileId }, context) => {
       const result = await operations.check(profileId, context)
       if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.issues.map((issue) => issue.message).join('; ') ?? 'Backup precheck failed')
       return result.data
     } }),
-    api.commands.register({ id: 'run', label: 'Backup now', labelKey: 'auto.5d5dba0742de', sideEffect: 'write', input: targetInput,
+    commandRegistrar(api)({ id: 'profile-run', outputSchema: backupResults['run'], label: 'Backup now', labelKey: 'auto.5d5dba0742de', sideEffect: 'write', input: targetInput,
       revision: profileRevision, preview: ({ profileId }) => operations.check(profileId),
       run: async ({ profileId }, context) => { const result = await operations.run(profileId, false, context); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Backup failed'); return { value: result.data, revert: null } }
     }),
-    api.commands.register({ id: 'history', label: 'Read backup history', labelKey: 'backup.surface.history', paletteSafe: false, sideEffect: 'read',
+    commandRegistrar(api)({ id: 'history', outputSchema: backupResults['history'], label: 'Read backup history', labelKey: 'backup.surface.history', paletteSafe: false, sideEffect: 'read',
       input: { schema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 500 }, cursor: { type: 'string' } } }, parse: (raw) => { const value = object(raw), limit = Number(value.limit ?? 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (value.cursor !== undefined && typeof value.cursor !== 'string')) throw new Error('Invalid pagination'); return { limit, cursor: value.cursor as string | undefined } } },
       run: ({ limit, cursor }) => operations.history(limit, cursor)
     }),
-    api.commands.register({ id: 'prune-preview', label: 'Preview backup retention', labelKey: 'backup.surface.prune-preview', paletteSafe: false, sideEffect: 'read', input: targetInput, run: prunePreview }),
-    api.commands.register({ id: 'prune', label: 'Apply backup retention', labelKey: 'backup.surface.prune', paletteSafe: false, sideEffect: 'write', input: targetInput,
+    commandRegistrar(api)({ id: 'prune-preview', outputSchema: backupResults['prune-preview'], label: 'Preview backup retention', labelKey: 'backup.surface.prune-preview', paletteSafe: false, sideEffect: 'read', input: targetInput, run: prunePreview }),
+    commandRegistrar(api)({ id: 'profile-prune', outputSchema: backupResults['prune'], label: 'Apply backup retention', labelKey: 'backup.surface.prune', paletteSafe: false, sideEffect: 'write', input: targetInput,
       revision: async (input) => ({ profile: profileRevision(input), plan: await prunePreview(input) }), preview: prunePreview,
       run: async ({ profileId }, context) => { const result = await backupApi(context.operation ? api.forOperation(context.operation) : api).prune(operations.plan(profileId, true), { dryRun: false }, context.cancellation); if (!result.ok || result.data?.errors.length) throw new Error(result.error ?? `Retention did not finish. ${result.data?.dropped.length ?? 0} archives were removed; inspect history before retrying.`); return { value: result.data, revert: null } }
     }),
-    api.commands.register({ id: 'restore-preview', label: 'Preview backup restore', labelKey: 'backup.surface.restore-preview', paletteSafe: false, sideEffect: 'read', input: mappingInput, run: restorePreview }),
-    api.commands.register({ id: 'restore', label: 'Restore backup mapping', labelKey: 'backup.surface.restore', paletteSafe: false, sideEffect: 'write', input: mappingInput,
+    commandRegistrar(api)({ id: 'restore-preview', outputSchema: backupResults['restore-preview'], label: 'Preview backup restore', labelKey: 'backup.surface.restore-preview', paletteSafe: false, sideEffect: 'read', input: mappingInput, run: restorePreview }),
+    commandRegistrar(api)({ id: 'restore', outputSchema: backupResults['restore'], label: 'Restore backup mapping', labelKey: 'backup.surface.restore', paletteSafe: false, sideEffect: 'write', input: mappingInput,
       revision: async (input) => ({ profile: profileRevision(input), plan: await restorePreview(input) }), preview: restorePreview,
       run: async ({ profileId, mappingIndex }, context) => { const result = await backupApi(context.operation ? api.forOperation(context.operation) : api).restoreApply(operations.plan(profileId), mappingIndex, context.cancellation); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Restore failed'); return { value: result.data, revert: null } }
     })
