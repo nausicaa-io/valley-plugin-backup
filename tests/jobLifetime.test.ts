@@ -176,6 +176,21 @@ describe('bounded backup job ownership', () => {
     expect(owned.storage.close).toHaveBeenCalledTimes(4)
   })
 
+  it('records a quiet run in history without the finished notification, and notifies otherwise', async () => {
+    const owned = backend()
+    const notify = vi.spyOn(owned.api.notifications, 'notify')
+    try {
+      const quiet = runIdentity()
+      expect(await owned.invoke('run', { plan: plan(), identity: quiet, quiet: true })).toMatchObject({ ok: true })
+      expect((await createHistoryStore(owned.api).query()).rows).toEqual([expect.objectContaining({ id: quiet.id, ok: true })])
+      expect(notify).not.toHaveBeenCalled()
+      const loud = runIdentity()
+      await owned.invoke('run', { plan: plan(), identity: loud })
+      expect(notify).toHaveBeenCalledTimes(1)
+      expect(notify.mock.calls[0][1]).toMatchObject({ sourceEventId: loud.id })
+    } finally { await owned.dispose() }
+  })
+
   it('snapshots datasets only for a source that carries the vault configuration', async () => {
     const owned = backend()
     expect(await owned.invoke('run', { plan: plan(), identity: runIdentity() })).toMatchObject({ ok: true, mappings: 1 })

@@ -7,6 +7,7 @@ import { register } from '../src/index'
 import { initLocalization, uiText } from '../src/localization'
 import { createProfileStore, mirrorPlan, parseProfiles, serializeProfile } from '../src/profiles'
 import { createBackupOperations, registerBackupCommands } from '../src/commands'
+import { createHistoryStore, HISTORY_FILE } from '../src/history'
 
 afterEach(cleanup)
 
@@ -272,6 +273,35 @@ describe('Backup automation and shared drafts', () => {
       expect(await api.commands.execute('backup:profile-read', { profileId: 'missing' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('not found') } })
       expect(await api.commands.execute('backup:profile-run', { profileId: 'forest' })).toMatchObject({ ok: false, error: { message: 'Source is unavailable' } })
       expect(vi.mocked(api.backend.callOperation).mock.calls.map(([method]) => method)).toEqual(['check'])
+    } finally { off(); store.dispose() }
+  })
+})
+
+describe('Backup history removal', () => {
+  it('removes one exact history row through the command bus and reverts to the exact prior file', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: [{ id: 'forest', name: 'Forest', mappings: [] }] } })
+    const { api } = mock
+    const store = createProfileStore(api)
+    const operations = createBackupOperations(api, store)
+    const off = registerBackupCommands(api, store, operations)
+    try {
+      const history = createHistoryStore(api)
+      await history.insert({ id: 'old', startedAt: '2026-09-28T08:00:00Z', profileName: 'Forest', ok: true })
+      await history.insert({ id: 'new', startedAt: '2026-09-29T08:00:00Z', profileName: 'Forest', ok: false, reason: 'stopped' })
+      const before = await api.data.files.readText(HISTORY_FILE)
+      expect(await api.commands.execute('backup:history-remove', { id: 'new', record: { id: 'new', startedAt: '2026-09-29T08:00:00Z', profileName: 'Forest', ok: true } })).toMatchObject({ ok: false })
+      expect(await api.data.files.readText(HISTORY_FILE)).toBe(before)
+      expect(mock.busUndo).toHaveLength(0)
+      const removed = await api.commands.execute('backup:history-remove', { id: 'new', record: { id: 'new', startedAt: '2026-09-29T08:00:00Z', profileName: 'Forest', ok: false, reason: 'stopped' } })
+      expect(removed).toMatchObject({ ok: true, value: { rows: [{ id: 'old' }] } })
+      expect((await history.query()).rows.map(entry => entry.id)).toEqual(['old'])
+      await mock.busUndo[0].undo()
+      expect(await api.data.files.readText(HISTORY_FILE)).toBe(before)
+      await mock.busUndo[0].redo!()
+      expect((await history.query()).rows.map(entry => entry.id)).toEqual(['old'])
+      await history.insert({ id: 'later', startedAt: '2026-09-30T08:00:00Z', profileName: 'Forest', ok: true })
+      await expect(mock.busUndo[0].undo()).rejects.toThrow('changed')
+      expect((await history.query()).rows.map(entry => entry.id)).toEqual(['later', 'old'])
     } finally { off(); store.dispose() }
   })
 })

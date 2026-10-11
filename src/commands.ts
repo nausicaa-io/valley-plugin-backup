@@ -6,7 +6,7 @@ import type { MirrorProgress, MirrorResult } from './types'
 import { uiText } from './localization'
 import { genId, parseProfiles, serializeProfile, mirrorPlan, type createProfileStore, type Profile } from './profiles'
 import { formatDuration } from './format'
-import { BackupClaimed, createHistoryStore } from './history'
+import { BackupClaimed, createHistoryStore, type RunRecord } from './history'
 export { BackupClaimed } from './history'
 
 type ProfileStore = ReturnType<typeof createProfileStore>
@@ -117,6 +117,12 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
   }
   const runs = createHistoryStore(api, assertActive)
   const history = (limit = 50, cursor?: string) => { assertActive(); return runs.query(limit, cursor) }
+  const removeHistory = async (id: string, record: RunRecord) => {
+    assertActive()
+    const { before, after } = await runs.remove(id, record)
+    const restore = (expected: RunRecord[], next: RunRecord[]) => async () => { assertActive(); await runs.replace(expected, next) }
+    return { value: await runs.query(500), revert: { label: 'Restore backup history entry', run: restore(after, before), reapply: restore(before, after) } }
+  }
   const check = (profileId?: string, context?: CommandContext) => {
     assertActive()
     store.assertClean()
@@ -258,7 +264,7 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const progress = value.progress && typeof value.progress === 'object' && !Array.isArray(value.progress) ? value.progress as MirrorProgress : null
     return { running: true, profileId: typeof value.profileId === 'string' ? value.profileId : local.profileId, progress: progress ?? (running ? local.progress : null) }
   }
-  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, check, run, cancel, stop, replace, update, isActive, assertActive, status, dispose }
+  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, removeHistory, check, run, cancel, stop, replace, update, isActive, assertActive, status, dispose }
 }
 
 export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore, operations: ReturnType<typeof createBackupOperations>, schedules: () => unknown = () => ({})): () => Promise<void> {
@@ -319,6 +325,16 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
     commandRegistrar(api)({ id: 'history', outputSchema: backupResults['history'], label: 'Read backup history', labelKey: 'backup.surface.history', paletteSafe: false, sideEffect: 'read',
       input: { schema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 500 }, cursor: { type: 'string' } } }, parse: (raw) => { const value = object(raw), limit = Number(value.limit ?? 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500 || (value.cursor !== undefined && typeof value.cursor !== 'string')) throw new Error('Invalid pagination'); return { limit, cursor: value.cursor as string | undefined } } },
       run: ({ limit, cursor }) => operations.history(limit, cursor)
+    }),
+    commandRegistrar(api)({ id: 'history-remove', outputSchema: backupResults['history'], label: 'Remove backup history entry', labelKey: 'backup.surface.history-remove', paletteSafe: false, sideEffect: 'write',
+      input: { schema: { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 256 }, record: { type: 'object', properties: { id: { type: 'string' }, startedAt: { type: 'string' } }, required: ['id', 'startedAt'], maxProperties: 1000, additionalProperties: { type: ['string', 'number', 'boolean', 'null'] } } }, required: ['id', 'record'], additionalProperties: false },
+        parse: (raw) => {
+          const value = object(raw), record = object(value.record)
+          if (typeof value.id !== 'string' || !value.id || value.id.length > 256 || record.id !== value.id || typeof record.startedAt !== 'string' || Object.values(record).some((entry) => entry !== null && !['string', 'number', 'boolean'].includes(typeof entry))) throw new Error('id and its exact history record are required')
+          return { id: value.id, record: record as RunRecord }
+        } },
+      revision: async ({ id }) => (await operations.history(500)).rows.find((row) => row.id === id) ?? null, preview: (input) => ({ action: 'remove-history', ...input }),
+      run: ({ id, record }) => operations.removeHistory(id, record)
     }),
     commandRegistrar(api)({ id: 'prune-preview', outputSchema: backupResults['prune-preview'], label: 'Preview backup retention', labelKey: 'backup.surface.prune-preview', paletteSafe: false, sideEffect: 'read', input: targetInput, run: prunePreview }),
     commandRegistrar(api)({ id: 'profile-prune', outputSchema: backupResults['prune'], label: 'Apply backup retention', labelKey: 'backup.surface.prune', paletteSafe: false, sideEffect: 'write', input: targetInput,

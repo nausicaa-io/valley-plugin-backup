@@ -197,7 +197,7 @@
       {
         "id": "read-only",
         "label": "Read-only",
-        "version": 4,
+        "version": 5,
         "description": "Status only; never run, restore, prune or edit backup profiles.",
         "entries": {
           "commands": {
@@ -230,6 +230,9 @@
             },
             "profile-delete": {
               "decision": "deny"
+            },
+            "history-remove": {
+              "decision": "deny"
             }
           }
         }
@@ -237,7 +240,7 @@
       {
         "id": "blocked",
         "label": "Blocked",
-        "version": 4,
+        "version": 5,
         "description": "No backup actions at all.",
         "entries": {
           "commands": {
@@ -296,6 +299,9 @@
               "decision": "deny"
             },
             "restorePlan": {
+              "decision": "deny"
+            },
+            "history-remove": {
               "decision": "deny"
             }
           }
@@ -558,7 +564,7 @@
         "metadata": {
           "command": {
             "id": "run",
-            "description": "Run a backup plan with durable run identity",
+            "description": "Run a backup plan with durable run identity; quiet: true skips the finished or failed notification",
             "effect": "execute",
             "inputSchema": {
               "type": "object",
@@ -691,6 +697,9 @@
                     "trigger"
                   ],
                   "additionalProperties": false
+                },
+                "quiet": {
+                  "type": "boolean"
                 }
               },
               "required": [

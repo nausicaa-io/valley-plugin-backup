@@ -56,6 +56,21 @@ export function createHistoryStore(api: Pick<ValleyPluginApi, 'data'>, assertAct
       if (!rows.some(row => row.id === id)) throw new Error('Backup history entry is missing')
       return rows.map(row => row.id === id ? { ...row, ...values } : row)
     }),
-    prune: (keep: number) => mutate(rows => sorted(rows).slice(0, keep))
+    prune: (keep: number) => mutate(rows => sorted(rows).slice(0, keep)),
+    /** Removes exactly the observed record and returns the stored rows before and after, for an exact inverse. */
+    async remove(id: string, expected: RunRecord): Promise<{ before: RunRecord[]; after: RunRecord[] }> {
+      let change!: { before: RunRecord[]; after: RunRecord[] }
+      await mutate(rows => {
+        const row = rows.find(existing => existing.id === id)
+        if (!row || JSON.stringify(row) !== JSON.stringify(expected)) throw new Error('Backup history entry changed; read history again')
+        change = { before: rows, after: rows.filter(existing => existing.id !== id) }
+        return change.after
+      })
+      return change
+    },
+    replace: (expected: RunRecord[], next: RunRecord[]) => mutate(rows => {
+      if (JSON.stringify(rows) !== JSON.stringify(expected)) throw new Error('Backup history changed after this operation')
+      return next
+    })
   }
 }

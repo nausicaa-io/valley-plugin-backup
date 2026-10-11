@@ -82,6 +82,7 @@
   "backup.properties.saveError": "Impossible d’enregistrer vos modifications. Elles sont conservées ; réessayez.",
   "backup.surface.check": "Vérifier le profil de sauvegarde",
   "backup.surface.history": "Lire l’historique des sauvegardes",
+  "backup.surface.history-remove": "Supprimer une entrée de l’historique des sauvegardes",
   "backup.surface.id": "Identifiant du profil",
   "backup.surface.logDirectory": "Dossier des journaux",
   "backup.surface.mappings": "Paires de dossiers",

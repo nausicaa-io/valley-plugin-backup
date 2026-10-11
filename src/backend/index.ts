@@ -22,7 +22,7 @@ const planSchema = z.object({
 }).strict()
 const input = z.object({ plan: planSchema }).strict()
 const identitySchema = z.object({ id: z.string().min(1).max(256), startedAt: z.string().datetime(), profileId: z.string().min(1).max(256), profileName: z.string().max(256), trigger: z.enum(['manual', 'scheduled', 'automation']) }).strict()
-const runInput = input.extend({ identity: identitySchema })
+const runInput = input.extend({ identity: identitySchema, quiet: z.boolean().optional() })
 /** A payload the schema refuses is rejected before any grant, write or history row: a known no-effect outcome. */
 function parse<T extends z.ZodTypeAny>(schema: T, raw: unknown): z.infer<T> {
   const parsed = schema.safeParse(raw)
@@ -99,13 +99,13 @@ export function register(api: PluginBackendApi): () => Promise<void> {
             } else throw failure
           }
           if (method === 'run') {
-            const { identity } = runInput.parse(payload)
+            const { identity, quiet } = runInput.parse(payload)
             const result = value as MirrorResult
             const history = createHistoryStore(ownedApi)
             if (failure && !(await history.query(200)).rows.some(row => row.id === identity.id)) throw failure
             await history.update(identity.id, { durationSec: result.durationSec, archived: result.archived, copied: result.copied ?? 0, errors: result.errors, failedItems: result.failedItems ?? 0, ok: result.ok, reason: result.ok ? null : result.cancelled ? 'stopped' : result.message ?? null })
             await history.prune(200)
-            if (!result.cancelled) await ownedApi.notifications.notify(result.ok ? 'finished' : 'failed', {
+            if (!result.cancelled && !quiet) await ownedApi.notifications.notify(result.ok ? 'finished' : 'failed', {
               sourceEventId: identity.id, targetItemId: identity.profileId, key: `run:${identity.id}`,
               title: t(result.ok ? 'backup.notification.finished' : 'backup.notification.failed'),
               body: result.ok ? t('backup.notification.summary', { profile: identity.profileName, copied: result.copied ?? 0, archived: result.archived, duration: formatDuration(result.durationSec, 'en') }) : t('backup.notification.reason', { profile: identity.profileName, reason: result.message ?? t('backend.failed') }),

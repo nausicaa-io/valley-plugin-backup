@@ -82,6 +82,7 @@
   "backup.properties.saveError": "无法保存更改。编辑内容已保留；请重试。",
   "backup.surface.check": "检查备份配置",
   "backup.surface.history": "读取备份历史",
+  "backup.surface.history-remove": "删除备份历史条目",
   "backup.surface.id": "配置 ID",
   "backup.surface.logDirectory": "日志文件夹",
   "backup.surface.mappings": "文件夹配对",

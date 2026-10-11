@@ -82,6 +82,7 @@
   "backup.properties.saveError": "No se pudieron guardar los cambios. Se conservan; inténtalo de nuevo.",
   "backup.surface.check": "Comprobar perfil de copia",
   "backup.surface.history": "Leer historial de copias",
+  "backup.surface.history-remove": "Eliminar entrada del historial de copias",
   "backup.surface.id": "ID del perfil",
   "backup.surface.logDirectory": "Carpeta de registros",
   "backup.surface.mappings": "Pares de carpetas",

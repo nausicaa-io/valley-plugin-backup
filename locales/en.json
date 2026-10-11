@@ -82,6 +82,7 @@
   "backup.properties.saveError": "Could not save your changes. Your edits are kept; try again.",
   "backup.surface.check": "Check backup profile",
   "backup.surface.history": "Read backup history",
+  "backup.surface.history-remove": "Remove backup history entry",
   "backup.surface.id": "Profile ID",
   "backup.surface.logDirectory": "Log folder",
   "backup.surface.mappings": "Folder pairs",

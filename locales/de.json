@@ -82,6 +82,7 @@
   "backup.properties.saveError": "Deine Änderungen konnten nicht gespeichert werden. Sie bleiben erhalten; versuche es erneut.",
   "backup.surface.check": "Sicherungsprofil prüfen",
   "backup.surface.history": "Sicherungsverlauf lesen",
+  "backup.surface.history-remove": "Sicherungsverlaufseintrag entfernen",
   "backup.surface.id": "Profil-ID",
   "backup.surface.logDirectory": "Protokollordner",
   "backup.surface.mappings": "Ordnerpaare",

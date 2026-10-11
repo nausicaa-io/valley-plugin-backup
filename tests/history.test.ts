@@ -56,3 +56,18 @@ it('does not mutate a destination when the backend history claim cannot be saved
   expect(storage.copy).not.toHaveBeenCalled()
   await off()
 })
+
+it('removes only the exact observed record and replaces rows only from the expected state', async () => {
+  const { api } = createMockValleyApi({ manifest: { id: 'backup' } })
+  const store = createHistoryStore(api)
+  await store.insert(row('a', '2026-09-28T08:00:00Z'))
+  await store.insert(row('b'))
+  const before = await api.data.files.readText(HISTORY_FILE)
+  await expect(store.remove('b', { ...row('b'), ok: true })).rejects.toThrow('changed')
+  expect(await api.data.files.readText(HISTORY_FILE)).toBe(before)
+  const change = await store.remove('b', row('b'))
+  expect(change.after.map(entry => entry.id)).toEqual(['a'])
+  await expect(store.replace(change.before, change.after)).rejects.toThrow('changed')
+  await store.replace(change.after, change.before)
+  expect(await api.data.files.readText(HISTORY_FILE)).toBe(before)
+})
