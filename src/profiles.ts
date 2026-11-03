@@ -109,7 +109,7 @@ export function createProfileStore(api: ValleyPluginApi) {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     setDraft,
     save,
-    assertClean: () => { if (dirty) throw new Error('Finish editing backup settings before changing profiles through automation') },
+    assertClean: () => { if (dirty) throw Object.assign(new Error('Finish editing backup settings before changing profiles through automation'), { code: 'UNSAVED_DRAFT', outcome: 'not-applied' as const, retryable: false }) },
     dispose: () => { off(); listeners.clear() }
   }
 }

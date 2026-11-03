@@ -1,5 +1,7 @@
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
 
+const refused = (code: string, message: string): Error => Object.assign(new Error(message), { code, outcome: 'not-applied' as const, retryable: false })
+
 export const HISTORY_FILE = 'history.jsonl'
 type RecordValue = string | number | boolean | null
 export type RunRecord = Record<string, RecordValue>
@@ -44,7 +46,7 @@ export function createHistoryStore(api: Pick<ValleyPluginApi, 'data'>, assertAct
   return {
     async query(limit = 50, cursor?: string) {
       const offset = cursor === undefined ? 0 : Number(cursor)
-      if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid history cursor')
+      if (!Number.isInteger(offset) || offset < 0) throw refused('INVALID_INPUT', 'Invalid history cursor')
       const rows = sorted(parse(await files.readText(HISTORY_FILE) ?? ''))
       return { rows: rows.slice(offset, offset + limit), revision: 0, ...(offset + limit < rows.length ? { nextCursor: String(offset + limit) } : {}) }
     },
@@ -53,7 +55,7 @@ export function createHistoryStore(api: Pick<ValleyPluginApi, 'data'>, assertAct
       return [...rows, row]
     }),
     update: (id: string, values: RunRecord) => mutate(rows => {
-      if (!rows.some(row => row.id === id)) throw new Error('Backup history entry is missing')
+      if (!rows.some(row => row.id === id)) throw refused('NOT_FOUND', 'Backup history entry is missing')
       return rows.map(row => row.id === id ? { ...row, ...values } : row)
     }),
     prune: (keep: number) => mutate(rows => sorted(rows).slice(0, keep)),
@@ -62,14 +64,14 @@ export function createHistoryStore(api: Pick<ValleyPluginApi, 'data'>, assertAct
       let change!: { before: RunRecord[]; after: RunRecord[] }
       await mutate(rows => {
         const row = rows.find(existing => existing.id === id)
-        if (!row || JSON.stringify(row) !== JSON.stringify(expected)) throw new Error('Backup history entry changed; read history again')
+        if (!row || JSON.stringify(row) !== JSON.stringify(expected)) throw refused('REVISION_CONFLICT', 'Backup history entry changed; read history again')
         change = { before: rows, after: rows.filter(existing => existing.id !== id) }
         return change.after
       })
       return change
     },
     replace: (expected: RunRecord[], next: RunRecord[]) => mutate(rows => {
-      if (JSON.stringify(rows) !== JSON.stringify(expected)) throw new Error('Backup history changed after this operation')
+      if (JSON.stringify(rows) !== JSON.stringify(expected)) throw refused('REVISION_CONFLICT', 'Backup history changed after this operation')
       return next
     })
   }

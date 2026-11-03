@@ -277,6 +277,37 @@ describe('Backup automation and shared drafts', () => {
   })
 })
 
+describe('Backup command refusals', () => {
+  it('reports unknown profiles, mismatched history rows and a failed precheck as not applied before any effect', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: [{ id: 'forest', name: 'Forest', mappings: [] }] } })
+    const { api } = mock
+    const store = createProfileStore(api)
+    const operations = createBackupOperations(api, store)
+    const off = registerBackupCommands(api, store, operations)
+    api.backend.callOperation = vi.fn(async () => { throw new Error('Source is unavailable') })
+    const command = (id: string) => mock.commands.find((entry) => entry.id === id)!
+    const attempt = async (id: string, input: unknown) => {
+      const target = command(id), parsed = target.input ? target.input.parse(input) : input
+      await target.revision?.(parsed as never)
+      return target.run(parsed as never, { caller: 'agent', dryRun: false, services: { undo: () => {} } } as never)
+    }
+    const refused = (code: string) => ({ code, outcome: 'not-applied', retryable: false })
+    try {
+      const history = createHistoryStore(api)
+      await history.insert({ id: 'run', startedAt: '2026-09-29T08:00:00Z', profileName: 'Forest', ok: true })
+      const before = { settings: JSON.stringify(api.settings.get()), history: await api.data.files.readText(HISTORY_FILE) }
+      await expect(attempt('profile-update', { profileId: 'missing', values: { name: 'Gone' } })).rejects.toMatchObject(refused('NOT_FOUND'))
+      await expect(attempt('profile-delete', { profileId: 'missing' })).rejects.toMatchObject(refused('NOT_FOUND'))
+      await expect(attempt('profile-run', { profileId: 'missing' })).rejects.toMatchObject(refused('NOT_FOUND'))
+      expect(() => command('profile-update').input!.parse({ profileId: 'forest', values: { colour: 'green' } })).toThrow(expect.objectContaining(refused('INVALID_INPUT')))
+      await expect(attempt('history-remove', { id: 'run', record: { id: 'run', startedAt: '2026-09-29T08:00:00Z', profileName: 'Forest', ok: false } })).rejects.toMatchObject(refused('REVISION_CONFLICT'))
+      await expect(attempt('profile-run', { profileId: 'forest' })).rejects.toMatchObject(refused('PRECHECK_FAILED'))
+      expect(vi.mocked(api.backend.callOperation).mock.calls.map(([method]) => method)).toEqual(['check'])
+      expect({ settings: JSON.stringify(api.settings.get()), history: await api.data.files.readText(HISTORY_FILE) }).toEqual(before)
+    } finally { off(); store.dispose() }
+  })
+})
+
 describe('Backup history removal', () => {
   it('removes one exact history row through the command bus and reverts to the exact prior file', async () => {
     const mock = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: [{ id: 'forest', name: 'Forest', mappings: [] }] } })
