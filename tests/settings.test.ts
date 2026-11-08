@@ -473,7 +473,7 @@ describe('Backup archive confirmation ownership', () => {
     await f.dispose()
   })
 
-  it.each(['selection', 'vault', 'unmount'] as const)('aborts a delayed preview on %s change and suppresses its late confirmation', async (change) => {
+  it.each(['selection', 'realm', 'unmount'] as const)('aborts a delayed preview on %s change and suppresses its late confirmation', async (change) => {
     const f = fixture()
     const held = deferred<unknown>()
     vi.mocked(f.api.backend.callOperation).mockImplementationOnce(() => held.promise)
@@ -481,7 +481,7 @@ describe('Backup archive confirmation ownership', () => {
     await waitFor(() => expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1))
     const signal = vi.mocked(f.api.backend.callOperation).mock.calls[0][2]?.cancellation
     if (change === 'selection') await f.select('wetlands')
-    if (change === 'vault') act(() => f.emitState({ vault: { path: '/fixtures/other', name: 'other', displayName: 'Other' } }))
+    if (change === 'realm') act(() => f.emitState({ realm: { path: '/fixtures/other', name: 'other', displayName: 'Other' } }))
     if (change === 'unmount') f.rendered.unmount()
     expect(signal?.aborted).toBe(true)
     await act(async () => { held.resolve(pruneResult) })

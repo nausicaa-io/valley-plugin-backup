@@ -1,6 +1,6 @@
 # Backup
 
-Mirror your Valley vault and other folders to another drive on demand or on a schedule, with live progress, recoverable archives and a history of every run.
+Mirror your Valley realm and other folders to another drive on demand or on a schedule, with live progress, recoverable archives and a history of every run.
 
 ## Features
 

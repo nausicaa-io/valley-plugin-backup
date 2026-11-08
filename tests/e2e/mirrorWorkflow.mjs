@@ -2,18 +2,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export async function verify(context) {
-  const { client, evaluate, waitFor, selectSettingsPage, editInput, readJson, vault, scratch } = context
+  const { client, evaluate, waitFor, selectSettingsPage, editInput, readJson, realm, scratch } = context
   const scratchRoot = fs.realpathSync(scratch)
-  const lexicalRelative = path.relative(path.resolve(scratch), path.resolve(vault))
-  if (!lexicalRelative || lexicalRelative.startsWith('..') || path.isAbsolute(lexicalRelative)) throw new Error('The vault must be inside the disposable scratch directory')
+  const lexicalRelative = path.relative(path.resolve(scratch), path.resolve(realm))
+  if (!lexicalRelative || lexicalRelative.startsWith('..') || path.isAbsolute(lexicalRelative)) throw new Error('The realm must be inside the disposable scratch directory')
   const sentinel = JSON.parse(fs.readFileSync(path.join(scratchRoot, '.valley-test-run.json'), 'utf8'))
-  const vaultRoot = fs.realpathSync(vault)
-  const relative = path.relative(scratchRoot, vaultRoot)
+  const realmRoot = fs.realpathSync(realm)
+  const relative = path.relative(scratchRoot, realmRoot)
   if (sentinel.version !== 1 || !/^[a-z0-9][a-z0-9-]*$/.test(sentinel.kind ?? '') || !relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('This workflow requires a disposable vault inside a sentinel-protected scratch run')
+    throw new Error('This workflow requires a disposable realm inside a sentinel-protected scratch run')
   }
-  const liveVault = await evaluate(`(async () => (await window.valley.getVault())?.path ?? null)()`, true)
-  if (typeof liveVault !== 'string' || (path.resolve(liveVault) !== path.resolve(vault) && path.resolve(liveVault) !== vaultRoot)) throw new Error('This workflow refuses to drive a different live vault')
+  const liveRealm = await evaluate(`(async () => (await window.valley.getRealm())?.path ?? null)()`, true)
+  if (typeof liveRealm !== 'string' || (path.resolve(liveRealm) !== path.resolve(realm) && path.resolve(liveRealm) !== realmRoot)) throw new Error('This workflow refuses to drive a different live realm')
   const backupMissingSource = path.join(scratch, 'missing-backup-source')
   const backupSource = path.join(scratch, 'backup-source')
   const backupDestination = path.join(scratch, 'backup-destination')
@@ -36,7 +36,7 @@ export async function verify(context) {
   )
   await editInput(client, 'Source 1', backupMissingSource)
   await editInput(client, 'Destination 1', backupDestination)
-  const backupSettingsFile = path.join(vault, '.valley', 'plugins', 'data', 'backup', 'config.json')
+  const backupSettingsFile = path.join(realm, '.valley', 'plugins', 'data', 'backup', 'config.json')
   await waitFor(
     async () => {
       if (!fs.existsSync(backupSettingsFile)) return false
@@ -130,7 +130,7 @@ export async function verify(context) {
   }
   const backupRuns = await waitFor(
     async () => {
-      const historyPath = path.join(vault, '.valley', 'plugins', 'data', 'backup', 'history.jsonl')
+      const historyPath = path.join(realm, '.valley', 'plugins', 'data', 'backup', 'history.jsonl')
       if (!fs.existsSync(historyPath)) return null
       const rows = fs.readFileSync(historyPath, 'utf8').split('\n').filter(line => line.trim()).map(line => JSON.parse(line))
       return rows.length === 1 ? rows : null

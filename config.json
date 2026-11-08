@@ -2341,7 +2341,7 @@
       "external": true,
       "datasets": true,
       "restoreDatasets": true,
-      "vault": true
+      "realm": true
     },
     "largeData": true
   }

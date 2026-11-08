@@ -19,7 +19,7 @@ const { preflightMirror, runMirror, runRestore } = createMirrorService(mirrorFix
 describe('runMirror', () => {
   it('mirrors, archives overwritten files, and writes both configured logs', async () => {
     const root = await fs.mkdtemp(join(tmpdir(), 'mirror-run-'))
-    const vault = join(root, 'vault')
+    const realm = join(root, 'realm')
     const source = join(root, 'source')
     const destination = join(root, 'destination')
     const trash = join(root, 'trash')
@@ -32,7 +32,7 @@ describe('runMirror', () => {
       await fs.writeFile(join(source, 'changed.md'), 'new and longer contents', 'utf-8')
       await fs.writeFile(join(destination, 'changed.md'), 'old contents', 'utf-8')
       await fs.writeFile(join(destination, 'gone.md'), 'deleted contents', 'utf-8')
-      await fs.mkdir(vault, { recursive: true })
+      await fs.mkdir(realm, { recursive: true })
       const plan: MirrorPlan = {
         label: 'Local test',
         retention: null,
@@ -67,7 +67,7 @@ describe('runMirror', () => {
 
   it('checks and mirrors two independent source folders in one profile', async () => {
     const root = await fs.mkdtemp(join(tmpdir(), 'mirror-two-folders-'))
-    const vault = join(root, 'vault')
+    const realm = join(root, 'realm')
     const ferns = join(root, 'sources', 'ferns')
     const mosses = join(root, 'sources', 'mosses')
     const fernsMirror = join(root, 'mirrored', 'ferns')
@@ -79,7 +79,7 @@ describe('runMirror', () => {
       await fs.mkdir(mossesMirror, { recursive: true })
       await fs.writeFile(join(ferns, 'bracken.md'), 'fern fixture', 'utf-8')
       await fs.writeFile(join(mosses, 'sphagnum.md'), 'moss fixture', 'utf-8')
-      await fs.mkdir(vault, { recursive: true })
+      await fs.mkdir(realm, { recursive: true })
       const plan: MirrorPlan = {
         label: 'Two folders',
         retention: null,
@@ -116,7 +116,7 @@ describe('runMirror', () => {
     'reports how many individual items failed, not just how many folders did',
     async () => {
       const root = await fs.mkdtemp(join(tmpdir(), 'mirror-items-'))
-      const vault = join(root, 'vault')
+      const realm = join(root, 'realm')
       const source = join(root, 'source')
       const destination = join(root, 'destination')
       try {
@@ -127,7 +127,7 @@ describe('runMirror', () => {
         await fs.writeFile(join(destination, 'locked', 'a.md'), 'a', 'utf-8')
         await fs.writeFile(join(destination, 'locked', 'b.md'), 'b', 'utf-8')
         await fs.chmod(join(destination, 'locked'), 0o500)
-        await fs.mkdir(vault, { recursive: true })
+        await fs.mkdir(realm, { recursive: true })
         const plan: MirrorPlan = {
           label: 'Local test',
           retention: null,

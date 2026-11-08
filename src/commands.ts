@@ -91,10 +91,10 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
   let pendingRun: Promise<unknown> | undefined
   const pendingChecks = new Map<Promise<unknown>, AbortController>()
   let controller: AbortController | undefined
-  const root = api.getState().vault?.path ?? null
+  const root = api.getState().realm?.path ?? null
   const isActive = (): boolean => {
     if (disposed) return false
-    try { return (api.getState().vault?.path ?? null) === root } catch { return false }
+    try { return (api.getState().realm?.path ?? null) === root } catch { return false }
   }
   const assertActive = (): void => { if (!isActive()) throw refused('BACKUP_INACTIVE', 'Backup session is no longer active') }
   const offState = api.subscribe(() => { if (!isActive()) void dispose() })

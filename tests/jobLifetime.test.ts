@@ -34,7 +34,7 @@ const completed = { ok: true, mappings: 1, archived: 2, durationSec: 1, errors: 
 function storageMock() {
   let id = 0
   const api: PluginStorageApi = {
-    open: vi.fn(async (input) => ({ ...input, path: input.area === 'vault' ? '/fixtures/active-vault' : input.path, handle: `grant-${++id}` })),
+    open: vi.fn(async (input) => ({ ...input, path: input.area === 'realm' ? '/fixtures/active-realm' : input.path, handle: `grant-${++id}` })),
     close: vi.fn(async () => {}),
     stat: vi.fn(async () => ({ name: 'fixture', kind: 'directory' as const, size: 0, mtimeMs: 0 })),
     list: vi.fn(async () => []), read: vi.fn(async () => ''),
@@ -167,9 +167,9 @@ describe('bounded backup job ownership', () => {
     vi.mocked(owned.storage.stat).mockImplementation(async (location) => ({ name: location.path, kind: location.path === 'gone.txt' ? 'file' : 'directory', size: 1, mtimeMs: 0 }))
     vi.mocked(owned.storage.list).mockImplementation(async (location) => location.handle === 'grant-2' && !location.path ? [{ name: 'gone.txt', kind: 'file', size: 1, mtimeMs: 0 }] : [])
     vi.mocked(owned.storage.close).mockImplementation(async handle => { if (handle === 'snapshot') throw new Error('Snapshot close outcome unknown') })
-    const vaultPlan = plan()
-    vaultPlan.mappings[0].source = '/fixtures/active-vault'
-    expect(await owned.invoke('run', { plan: vaultPlan, identity: runIdentity() })).toMatchObject({ ok: false, archived: 1, mappings: 1, message: 'Snapshot close outcome unknown' })
+    const realmPlan = plan()
+    realmPlan.mappings[0].source = '/fixtures/active-realm'
+    expect(await owned.invoke('run', { plan: realmPlan, identity: runIdentity() })).toMatchObject({ ok: false, archived: 1, mappings: 1, message: 'Snapshot close outcome unknown' })
     expect(owned.storage.move).toHaveBeenCalledOnce()
     expect(vi.mocked(owned.storage.close).mock.calls.map(([handle]) => handle)).toEqual(['snapshot', 'grant-1', 'grant-2', 'grant-3'])
     await owned.dispose()
@@ -191,7 +191,7 @@ describe('bounded backup job ownership', () => {
     } finally { await owned.dispose() }
   })
 
-  it('snapshots datasets only for a source that carries the vault configuration', async () => {
+  it('snapshots datasets only for a source that carries the realm configuration', async () => {
     const owned = backend()
     expect(await owned.invoke('run', { plan: plan(), identity: runIdentity() })).toMatchObject({ ok: true, mappings: 1 })
     expect(owned.storage.snapshotDatasets).not.toHaveBeenCalled()
@@ -275,9 +275,9 @@ describe('bounded backup job ownership', () => {
     vi.mocked(owned.storage.close).mockImplementation(async handle => { await (handle === 'snapshot' ? snapshotClose.promise : grantsClose.promise) })
     const controller = new AbortController()
     let settled = false, drained = false
-    const vaultPlan = { ...plan(), logDirectory: '/fixtures/logs', masterLog: '/fixtures/master.log' }
-    vaultPlan.mappings[0].source = '/fixtures/active-vault'
-    const task = owned.invoke('run', { plan: vaultPlan, identity: runIdentity() }, owned.context(controller)).finally(() => { settled = true })
+    const realmPlan = { ...plan(), logDirectory: '/fixtures/logs', masterLog: '/fixtures/master.log' }
+    realmPlan.mappings[0].source = '/fixtures/active-realm'
+    const task = owned.invoke('run', { plan: realmPlan, identity: runIdentity() }, owned.context(controller)).finally(() => { settled = true })
     await wrote.promise
     await vi.advanceTimersByTimeAsync(150_000)
     expect(settled).toBe(false)
@@ -321,14 +321,14 @@ describe('bounded backup job ownership', () => {
 })
 
 describe('backup storage drain', () => {
-  it('uses the captured vault grant for dataset restore and joins accepted work before disposal', async () => {
+  it('uses the captured realm grant for dataset restore and joins accepted work before disposal', async () => {
     const api = storageMock()
     const owner = createStorageSession(api)
     const acceptedPlan = plan()
-    acceptedPlan.mappings[0].source = '/fixtures/active-vault'
+    acceptedPlan.mappings[0].source = '/fixtures/active-realm'
     await owner.authorizePlan(acceptedPlan, 'restoreApply')
     expect(vi.mocked(api.open).mock.calls).toEqual([
-      [{ area: 'vault', path: '', kind: 'directory', mode: 'write' }],
+      [{ area: 'realm', path: '', kind: 'directory', mode: 'write' }],
       [{ area: 'external', path: '/fixtures/destination', kind: 'directory', mode: 'write' }]
     ])
     expect(owner.restoreExclusions(acceptedPlan.mappings[0])).toEqual(['.valley/'])
@@ -380,7 +380,7 @@ describe('backup storage drain', () => {
     const owner = createStorageSession(api)
     const held = deferred<Awaited<ReturnType<typeof api.snapshotDatasets>>>()
     vi.mocked(api.snapshotDatasets).mockReturnValue(held.promise)
-    const snapshot = owner.prepareStorageSnapshots(['/fixtures/active-vault'])
+    const snapshot = owner.prepareStorageSnapshots(['/fixtures/active-realm'])
     await vi.waitFor(() => expect(api.snapshotDatasets).toHaveBeenCalledOnce())
     const draining = owner.dispose()
     held.resolve({ handle: 'late-snapshot', files: [], excluded: [] })

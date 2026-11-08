@@ -29,7 +29,7 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
   }
   const grants: PluginStorageGrant[] = []
   const snapshots = new Map<string, string>()
-  let restoreVault: PluginStorageGrant | undefined
+  let restoreRealm: PluginStorageGrant | undefined
   const missing = (path: string): Error => Object.assign(new Error(t('backend.storageMissing', { path })), { code: 'ENOENT' })
   const location = (path: string, write = false): PluginStorageLocation => {
     assertActive()
@@ -41,9 +41,9 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
 
   async function authorizePlan(plan: MirrorPlan, operation: 'check' | 'run' | 'prune' | 'restorePlan' | 'restoreApply' | 'reveal'): Promise<void> {
     if (operation === 'restorePlan' || operation === 'restoreApply') {
-      const grant = await accepted(() => storage.open({ area: 'vault', path: '', kind: 'directory', mode: operation === 'restoreApply' ? 'write' : 'read' }))
+      const grant = await accepted(() => storage.open({ area: 'realm', path: '', kind: 'directory', mode: operation === 'restoreApply' ? 'write' : 'read' }))
       grants.push(grant)
-      restoreVault = grant
+      restoreRealm = grant
       assertActive()
     }
     const requested: Array<{ path: string; kind: 'file' | 'directory'; mode: 'read' | 'write' }> = []
@@ -88,27 +88,27 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     async appendFile(path: string, text: string): Promise<void> { await accepted(() => storage.write(location(path, true), text, true)) }
   }
 
-  let vaultPath: Promise<string> | undefined
-  const activeVault = (): Promise<string> => vaultPath ??= (async () => {
-    if (restoreVault) return restoreVault.path
-    const grant = await accepted(() => storage.open({ area: 'vault', path: '', kind: 'directory', mode: 'read' }))
+  let realmPath: Promise<string> | undefined
+  const activeRealm = (): Promise<string> => realmPath ??= (async () => {
+    if (restoreRealm) return restoreRealm.path
+    const grant = await accepted(() => storage.open({ area: 'realm', path: '', kind: 'directory', mode: 'read' }))
     grants.push(grant)
     assertActive()
     return grant.path
   })()
   /**
    * Stage consistent dataset copies, but only for a plan that actually carries
-   * them: a source holding the vault's configuration folder. A backup of any
-   * other folder never touches the vault's databases, so a busy or migrating
+   * them: a source holding the realm's configuration folder. A backup of any
+   * other folder never touches the realm's databases, so a busy or migrating
    * store elsewhere cannot fail it.
    */
   async function prepareStorageSnapshots(sources: readonly string[]): Promise<{ stagingRoot: string | null; files: Map<string, string>; excluded: string[] }> {
-    const config = normalize(`${await activeVault()}/${CONFIG_DIR}`).toLowerCase()
-    const carriesVault = sources.some((source) => {
+    const config = normalize(`${await activeRealm()}/${CONFIG_DIR}`).toLowerCase()
+    const carriesRealm = sources.some((source) => {
       const root = normalize(source).toLowerCase()
       return config === root || config.startsWith(`${root.replace(/\/$/, '')}/`)
     })
-    if (!carriesVault) return { stagingRoot: null, files: new Map(), excluded: [] }
+    if (!carriesRealm) return { stagingRoot: null, files: new Map(), excluded: [] }
     const snapshot = await accepted(() => storage.snapshotDatasets())
     const stagingRoot = `/snapshot/${snapshot.handle}`
     grants.push({ handle: snapshot.handle, path: stagingRoot, kind: 'directory', mode: 'read' })
@@ -124,11 +124,11 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     await accepted(() => storage.close(handle), true)
   }
   async function revealStorage(path: string): Promise<void> { await accepted(() => storage.reveal(location(path))) }
-  const restoringVault = (mapping: MirrorMapping): boolean => Boolean(restoreVault && normalize(mapping.source) === normalize(restoreVault.path))
-  const restoreExclusions = (mapping: MirrorMapping): string[] => restoringVault(mapping) ? [`${CONFIG_DIR}/`] : []
+  const restoringRealm = (mapping: MirrorMapping): boolean => Boolean(restoreRealm && normalize(mapping.source) === normalize(restoreRealm.path))
+  const restoreExclusions = (mapping: MirrorMapping): string[] => restoringRealm(mapping) ? [`${CONFIG_DIR}/`] : []
   async function restoreDatasets(mapping: MirrorMapping, dryRun: boolean) {
-    if (!restoringVault(mapping)) return { stores: [], skipped: [] }
-    return accepted(() => storage.restoreDatasets({ source: location(mapping.destination), target: { handle: restoreVault!.handle, path: '' }, dryRun }))
+    if (!restoringRealm(mapping)) return { stores: [], skipped: [] }
+    return accepted(() => storage.restoreDatasets({ source: location(mapping.destination), target: { handle: restoreRealm!.handle, path: '' }, dryRun }))
   }
   function dispose(): Promise<void> {
     if (disposal) return disposal
