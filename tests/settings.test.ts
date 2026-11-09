@@ -225,7 +225,7 @@ describe('Backup schedule and stop', () => {
   it('shows when the selected profile backs up next', async () => {
     const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ schedule: { every: 'daily', time: '02:00', since: Date.now() } }) })
     const next = new Date(); next.setDate(next.getDate() + 1); next.setHours(2, 0, 0, 0)
-    api.backend.call = vi.fn(async () => ({ field: { nextAt: next.getTime(), waiting: null } })) as typeof api.backend.call
+    api.backend.call = vi.fn(async () => ({ field: { nextAt: next.getTime(), waiting: null } })) as unknown as typeof api.backend.call
     const dispose = register(api)
     render(React.createElement(viewOf(api, 'backup.panel')))
     expect(await screen.findByText(/^Next backup (today|tomorrow) 02:00$/)).toBeInTheDocument()

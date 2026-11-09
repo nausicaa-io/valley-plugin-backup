@@ -679,14 +679,14 @@ describe('backup frontend operation lifetime', () => {
 
   it('asks the backend to stop a run this window did not start', async () => {
     const { api, store, off } = await commandFixture('run')
-    const call = vi.fn(async () => true) as typeof api.backend.call
+    const call = vi.fn(async () => true) as unknown as typeof api.backend.call
     api.backend.call = call
     const callOperation = vi.spyOn(api.backend, 'callOperation')
     try {
       expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: true, value: { stopped: true } })
       expect(call).toHaveBeenCalledOnce()
       expect(call).toHaveBeenCalledWith('stop', {})
-      vi.mocked(call).mockResolvedValueOnce(false)
+      vi.mocked(call).mockResolvedValueOnce(false as never)
       expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: true, value: { stopped: false } })
       vi.mocked(call).mockRejectedValueOnce(new Error('Backend is not running'))
       expect(await api.commands.execute('backup:stop', {})).toMatchObject({ ok: false, error: { message: expect.stringContaining('Backend is not running') } })

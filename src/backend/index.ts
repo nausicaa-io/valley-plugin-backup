@@ -214,14 +214,21 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       api.rpc.emit('backup.schedule', statuses)
     })().catch(() => {}).finally(() => { polling = undefined })
   }
-  const interval = setInterval(poll, 60000)
-  subscriptions.push(api.lifecycle.onResume(poll), api.settings.subscribe(poll))
+  // Only a saved schedule needs the minute check; a backend without one stays asleep.
+  let interval: ReturnType<typeof setInterval> | undefined
+  const syncInterval = (): void => {
+    const scheduled = parseProfiles(api.settings.get()).some(profile => profile.schedule && profile.schedule.every !== 'off' && profile.rows.some(row => row.source && row.destination))
+    if (scheduled && interval === undefined) interval = setInterval(poll, 60000)
+    else if (!scheduled && interval !== undefined) { clearInterval(interval); interval = undefined }
+  }
+  syncInterval()
+  subscriptions.push(api.lifecycle.onResume(poll), api.settings.subscribe(() => { syncInterval(); poll() }))
   poll()
   return () => {
     if (disposal) return disposal
     closed = true
     workflow.dispose()
-    clearInterval(interval)
+    if (interval !== undefined) clearInterval(interval)
     const failures: unknown[] = []
     for (const unsubscribe of subscriptions) { try { unsubscribe() } catch (error) { failures.push(error) } }
     return disposal = jobs.dispose().then(() => {

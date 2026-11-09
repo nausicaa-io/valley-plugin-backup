@@ -37,6 +37,17 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('background backup scheduling', () => {
+  it('keeps no minute timer while no profile has a schedule, and arms one when a schedule appears', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    const f = await fixture([], [{ id: 'field', name: 'Field archive', mappings: [{ source: '/fixtures/source', destination: '/fixtures/destination' }] }] as never)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(interval).not.toHaveBeenCalledWith(expect.anything(), 60000)
+    await f.api.settings.set('profiles', profiles)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(interval).toHaveBeenCalledWith(expect.anything(), 60000)
+    await f.client.dispose(); await f.off()
+  })
+
   it('claims a due slot in the backend and exposes its next run to the UI', async () => {
     const f = await fixture()
     await vi.advanceTimersByTimeAsync(0)
