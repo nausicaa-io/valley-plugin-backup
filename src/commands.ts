@@ -321,7 +321,7 @@ export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore
       if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.issues.map((issue) => issue.message).join('; ') ?? 'Backup precheck failed')
       return result.data
     } }),
-    commandRegistrar(api)({ id: 'profile-run', outputSchema: backupResults['run'], label: 'Backup now', labelKey: 'auto.5d5dba0742de', sideEffect: 'write', input: targetInput,
+    commandRegistrar(api)({ id: 'profile-run', outputSchema: backupResults['run'], menu: { group: 'backup', order: 10, label: 'Back Up Now', labelKey: 'menu.backUpNow' }, label: 'Backup now', labelKey: 'auto.5d5dba0742de', sideEffect: 'write', input: targetInput,
       revision: profileRevision, preview: ({ profileId }) => operations.check(profileId),
       run: async ({ profileId }, context) => { const result = await operations.run(profileId, false, context); if (!result.ok || !result.data?.ok) throw new Error(result.error ?? result.data?.message ?? 'Backup failed'); return { value: result.data, revert: null } }
     }),

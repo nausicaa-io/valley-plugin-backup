@@ -181,5 +181,6 @@
   "backup.exclude.help": "输入相对于源文件夹的文件夹路径（nested/）或匹配模式（*.tmp），然后按 Enter。使用 × 删除规则。",
   "notification.open": "打开备份",
   "bookmark.view": "备份配置",
-  "bookmark.item": "所选项目"
+  "bookmark.item": "所选项目",
+  "menu.backUpNow": "立即备份"
 }

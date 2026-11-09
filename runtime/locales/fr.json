@@ -181,5 +181,6 @@
   "backup.exclude.help": "Saisir un chemin de dossier relatif à la source (nested/) ou un motif (*.tmp), puis appuyer sur Entrée. Utiliser × pour retirer une règle.",
   "notification.open": "Ouvrir la sauvegarde",
   "bookmark.view": "Profil de sauvegarde",
-  "bookmark.item": "Élément sélectionné"
+  "bookmark.item": "Élément sélectionné",
+  "menu.backUpNow": "Sauvegarder maintenant"
 }

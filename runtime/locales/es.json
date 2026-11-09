@@ -181,5 +181,6 @@
   "backup.exclude.help": "Escribe una ruta de carpeta relativa al origen (nested/) o un patrón (*.tmp) y pulsa Enter. Usa × para quitar una regla.",
   "notification.open": "Abrir copia de seguridad",
   "bookmark.view": "Perfil de copia",
-  "bookmark.item": "Elemento seleccionado"
+  "bookmark.item": "Elemento seleccionado",
+  "menu.backUpNow": "Hacer copia ahora"
 }

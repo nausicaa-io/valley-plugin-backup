@@ -181,5 +181,6 @@
   "backup.exclude.help": "Ordnerpfad relativ zur Quelle (nested/) oder Muster (*.tmp) eingeben und Enter drücken. Mit × eine Regel entfernen.",
   "notification.open": "Backup öffnen",
   "bookmark.view": "Sicherungsprofil",
-  "bookmark.item": "Ausgewählter Eintrag"
+  "bookmark.item": "Ausgewählter Eintrag",
+  "menu.backUpNow": "Jetzt sichern"
 }

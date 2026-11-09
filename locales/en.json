@@ -181,5 +181,6 @@
   "backup.exclude.help": "Enter a folder path relative to Source (nested/) or a pattern (*.tmp), then press Enter. Use × to remove a rule.",
   "notification.open": "Open backup",
   "bookmark.view": "Backup profile",
-  "bookmark.item": "Selected item"
+  "bookmark.item": "Selected item",
+  "menu.backUpNow": "Back Up Now"
 }
