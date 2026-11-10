@@ -6,7 +6,7 @@ Mirror your Valley realm and other folders to another drive on demand or on a sc
 
 - Configure source and destination folders in separate backup profiles.
 - Run a profile hourly, daily or weekly while Valley is open. A backup missed while the app was closed runs at the next launch, and one waiting for an unplugged drive starts once the drive is connected.
-- Follow progress by items and bytes, and stop a running backup at any time. Files already copied or archived stay.
+- Follow progress by items and bytes, and stop a running backup at any time. Resume it to continue with the folders that did not finish, or cancel it to start over. Files already copied or archived stay.
 - Keep every changed or deleted file under a timestamp in the destination’s `.backup-archive` folder, or in a separate archive folder, and restore a folder from its backup with a preview first.
 - Clean up old archives automatically: every archive for 7 days, then one per day for 30 days and one per week for 8 weeks.
 - Review run history with copied, archived and failed items, including scheduled, stopped and interrupted runs.

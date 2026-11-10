@@ -213,12 +213,38 @@ describe('Backup schedule and stop', () => {
     const dispose = register(api)
     render(React.createElement(viewOf(api, 'backup.panel')))
     fireEvent.click(screen.getByRole('button', { name: 'Backup now' }))
-    const stop = await screen.findByRole('button', { name: 'Stop' })
+    const stop = await screen.findByRole('button', { name: 'Stop now' })
     await act(async () => { fireEvent.click(stop) })
     expect(signal?.aborted).toBe(true)
     expect(await screen.findByText('Stopped — 3 copied, 0 archived')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Backup now' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Backup now' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(await screen.findByRole('button', { name: 'Backup now' })).toBeEnabled()
+    expect(screen.queryByText('Stopped — 3 copied, 0 archived')).toBeNull()
     expect(api.notifications.notify).not.toHaveBeenCalled()
+    await dispose()
+  })
+
+  it('lets the engine end a stopped run so its counts come back', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith() })
+    let signal: AbortSignal | undefined
+    let engineEnd!: () => void
+    const ended = new Promise<void>((resolve) => { engineEnd = resolve })
+    api.backend.callOperation = vi.fn(async (method: string, _payload?: unknown, options?: { cancellation?: AbortSignal }) => {
+      if (method === 'check') return { ok: true, issues: [] }
+      signal = options?.cancellation
+      await ended
+      return { ok: false, cancelled: true, mappings: 1, archived: 2, copied: 26120, durationSec: 9, errors: 0 }
+    }) as typeof api.backend.callOperation
+    api.backend.call = vi.fn(async (method: string) => { if (method !== 'stop') return []; engineEnd(); return true }) as unknown as typeof api.backend.call
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    fireEvent.click(screen.getByRole('button', { name: 'Backup now' }))
+    const stop = await screen.findByRole('button', { name: 'Stop now' })
+    await act(async () => { fireEvent.click(stop) })
+    expect(await screen.findByText('Stopped — 26120 copied, 2 archived')).toBeInTheDocument()
+    expect(signal?.aborted).toBe(false)
     await dispose()
   })
 

@@ -2,7 +2,7 @@
   "apiVersion": 5,
   "id": "backup",
   "name": "Backup",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "Mirror folders to another drive on demand or on a schedule, with live progress and recoverable archives.",
   "author": [
     "nausicaa"

@@ -35,12 +35,14 @@ interface PanelState {
   historyError: string | null
   estimateSec: number | null
   startedAt: number
+  /** The profile a stopped run can resume for. */
+  resumeProfileId: string | null
 }
 
 const number = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0
 
-export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<ReturnType<typeof createBackupOperations>, 'isActive' | 'missingFolders' | 'check' | 'run' | 'cancel' | 'profile' | 'history'>) {
-  let snapshot: PanelState = { status: 'idle', summary: '', lines: [], progress: null, mappingResults: [], issues: [], missingFolders: [], history: [], historyError: null, estimateSec: null, startedAt: 0 }
+export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<ReturnType<typeof createBackupOperations>, 'isActive' | 'missingFolders' | 'check' | 'run' | 'stop' | 'profile' | 'history'>) {
+  let snapshot: PanelState = { status: 'idle', summary: '', lines: [], progress: null, mappingResults: [], issues: [], missingFolders: [], history: [], historyError: null, estimateSec: null, startedAt: 0, resumeProfileId: null }
   let disposed = false
   let disposal: Promise<void> | undefined
   let historyRun: Promise<void> | undefined
@@ -87,7 +89,7 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
   const offHistory = subscribeHistory(api, () => { void loadHistory() })
   const offProgress = backupApi(api).onProgress(value => {
     if (value.update) publish({ progress: value.update })
-    else if (value.mapping) publish({ mappingResults: [...snapshot.mappingResults.filter(item => item.index !== value.mapping!.index), value.mapping].sort((a, b) => a.index - b.index) })
+    else if (value.mapping) publish({ mappingResults: [...snapshot.mappingResults.filter(item => item.source !== value.mapping!.source || item.destination !== value.mapping!.destination), value.mapping].sort((a, b) => a.index - b.index) })
     else if (value.lines?.length) publish({ lines: [...snapshot.lines, ...value.lines].slice(-800) })
   })
   let stopping = false
@@ -96,11 +98,13 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
     snapshot.mappingResults.map(item => item.status === 'running' ? { ...item, status } : item)
   /** Preflight, then run with live progress. A scheduled run passes its trigger
    *  and slot id; a slot another window already claimed leaves the panel idle. */
-  const start = (profileId: string, options: RunOptions = {}): Promise<void> => {
+  const start = (profileId: string, { resume = false, ...options }: RunOptions & { resume?: boolean } = {}): Promise<void> => {
     if (!active()) return Promise.resolve()
     if (run) return run
     run = (async () => {
       const previous = { status: snapshot.status, summary: snapshot.summary }
+      // A resume that cannot go on yet (a drive went away) stays resumable.
+      const blocked = resume ? 'stopped' as const : 'failed' as const
       try {
         publish({ issues: [], missingFolders: [] })
         // A scheduled run keeps waiting for its drive; a manual one runs whatever is there now.
@@ -108,24 +112,31 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
         const skipFolders = manual ? await operations.missingFolders(profileId || undefined) : []
         if (!active()) return
         publish({ missingFolders: skipFolders })
-        if (skipFolders.length && mirrorPlan(operations.profile(profileId || undefined)).mappings.every((mapping) => skipFolders.includes(mapping.source) || skipFolders.includes(mapping.destination))) {
-          publish({ status: 'failed', summary: uiText('backup.folder.allMissing') })
+        const mappings = mirrorPlan(operations.profile(profileId || undefined)).mappings
+        const finished = resume ? snapshot.mappingResults.filter(item => item.status === 'done') : []
+        const finishedDestinations = finished.map(item => item.destination)
+        const left = mappings.filter(mapping => !finishedDestinations.includes(mapping.destination))
+        // Stopped after the last folder finished: nothing is left to continue, so every folder runs again.
+        const doneDestinations = left.length ? finishedDestinations : []
+        const pending = left.length ? left : mappings
+        if (skipFolders.length && pending.every((mapping) => skipFolders.includes(mapping.source) || skipFolders.includes(mapping.destination))) {
+          publish({ status: blocked, summary: uiText('backup.folder.allMissing') })
           return
         }
-        const preflight = await operations.check(profileId || undefined, undefined, skipFolders)
+        const preflight = await operations.check(profileId || undefined, undefined, skipFolders, doneDestinations)
         if (!active()) return
         if (!preflight.ok || !preflight.data?.ok) {
-          publish({ status: 'failed', summary: '', issues: preflight.data?.issues ?? [{ kind: 'dest-error', message: uiText('auto.e97ecd4af356') }] })
+          publish({ status: blocked, summary: resume ? previous.summary : '', issues: preflight.data?.issues ?? [{ kind: 'dest-error', message: uiText('auto.e97ecd4af356') }] })
           return
         }
         const selected = operations.profile(profileId || undefined)
         const prior = snapshot.history.find(item => item.ok && (item.profileId === selected.id || item.profileName === selected.name)) ?? snapshot.history.find(item => item.ok)
-        publish({ status: 'running', summary: '', lines: [], progress: null, mappingResults: [], estimateSec: prior?.durationSec ?? null, startedAt: Date.now() })
-        const invoked = await operations.run(profileId || undefined, true, undefined, manual ? { ...options, skipFolders } : options)
+        publish({ status: 'running', summary: '', lines: resume ? snapshot.lines : [], progress: null, mappingResults: resume ? finished : [], estimateSec: resume ? null : prior?.durationSec ?? null, startedAt: Date.now(), resumeProfileId: null })
+        const invoked = await operations.run(profileId || undefined, true, undefined, manual ? { ...options, skipFolders, doneDestinations } : options)
         if (!active()) return
         const result = invoked.data
         if (result?.cancelled || (!result && stopping)) {
-          publish({ status: 'stopped', progress: null, mappingResults: settleRunning('stopped'), summary: uiText('backup.status.stopped', { copied: result?.copied ?? 0, archived: result?.archived ?? 0 }) })
+          publish({ status: 'stopped', resumeProfileId: selected.id, progress: null, mappingResults: settleRunning('stopped'), summary: uiText('backup.status.stopped', { copied: result?.copied ?? 0, archived: result?.archived ?? 0 }) })
         } else if (!invoked.ok || !result) {
           publish({ status: 'failed', progress: null, mappingResults: settleRunning('failed'), summary: uiText('auto.beb2ea0a45a6') })
         } else {
@@ -146,7 +157,16 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
     })().finally(() => { run = undefined })
     return run
   }
-  const stop = (): void => { if (run && operations.cancel()) stopping = true }
+  const stop = (): void => {
+    if (!run || stopping) return
+    stopping = true
+    void operations.stop().catch(() => { stopping = false })
+  }
+  /** Forget a stopped run: the panel is back at Backup now. Copied and archived files stay. */
+  const discardStopped = (): void => {
+    if (run || snapshot.status !== 'stopped') return
+    publish({ status: 'idle', summary: '', progress: null, mappingResults: [], issues: [], missingFolders: [], resumeProfileId: null })
+  }
   return {
     getSnapshot: () => snapshot,
     subscribe(listener: () => void) {
@@ -160,6 +180,7 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
     loadHistory,
     start,
     stop,
+    discardStopped,
     isRunning: (): boolean => !!run,
     dispose(): Promise<void> {
       if (disposal) return disposal

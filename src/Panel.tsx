@@ -47,7 +47,7 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
   const { IconCheck, IconX, IconBan, IconLoader, IconChevronDown, IconHardDrive, IconList, IconHistory, IconFolderOpen, IconSliders, IconAlert } = icons
   const STATUS_ICON: Record<MirrorMappingResult['status'], ReturnType<typeof h>> = { running: IconLoader, done: IconCheck, skipped: IconBan, failed: IconX, stopped: IconBan }
   const BackupPanel = (): ReturnType<typeof h> => {
-    const { status, summary, lines, progress, mappingResults, issues, missingFolders, history, historyError, estimateSec, startedAt } = React.useSyncExternalStore(state.subscribe, state.getSnapshot)
+    const { status, summary, lines, progress, mappingResults, issues, missingFolders, history, historyError, estimateSec, startedAt, resumeProfileId } = React.useSyncExternalStore(state.subscribe, state.getSnapshot)
     const schedules = React.useSyncExternalStore(scheduler.subscribe, scheduler.getSnapshot)
     const editableProfiles = React.useSyncExternalStore(profileStore.subscribe, profileStore.getSnapshot)
     const [profiles, setProfiles] = React.useState<Array<{ id: string; name: string }>>([])
@@ -142,6 +142,11 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
       await profileStore.settled()
       await state.start(selectedId)
     }
+    const resumeRun = async (): Promise<void> => {
+      await profileStore.settled()
+      await state.start(selectedId, { resume: true })
+    }
+    const canResume = status === 'stopped' && resumeProfileId === selectedId
     React.useEffect(() => { maxOverallRef.current = 0 }, [startedAt])
 
     const selectedProfile = editableProfiles.find((p) => p.id === selectedId)
@@ -331,7 +336,7 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
             'div',
             { className: 'backup-alert-actions' },
             btn(uiText('auto.432e860f10ff'), openSettings),
-            btn(uiText('auto.9f5cd8a2e880'), () => void startRun())
+            btn(uiText('auto.9f5cd8a2e880'), () => void (canResume ? resumeRun() : startRun()))
           )
         )
       : null
@@ -342,7 +347,14 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
           { className: 'backup-run backup-run--stop', onClick: () => state.stop(), title: uiText('backup.action.stopHint') },
           uiText('backup.action.stop')
         )
-      : h(
+      : canResume
+        ? h(
+            'div',
+            { className: 'backup-run-choice' },
+            h('button', { className: 'backup-run', disabled: noFolderSelected, title: uiText('backup.action.resumeHint'), onClick: () => void resumeRun() }, uiText('backup.action.resume')),
+            h('button', { className: 'backup-btn', title: uiText('backup.action.cancelHint'), onClick: () => state.discardStopped() }, uiText('backup.action.cancel'))
+          )
+        : h(
           'button',
           {
             className: 'backup-run',

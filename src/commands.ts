@@ -19,6 +19,8 @@ export interface RunOptions {
   runId?: string
   /** Folders found missing just before this run; their pairs are left out of it. */
   skipFolders?: readonly string[]
+  /** Destinations of pairs a stopped run already finished; a resumed run leaves those pairs out. */
+  doneDestinations?: readonly string[]
 }
 /** History reason of a run that started but never recorded an outcome. */
 export const RUN_INTERRUPTED = 'interrupted'
@@ -130,9 +132,9 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const restore = (expected: RunRecord[], next: RunRecord[]) => async () => { assertActive(); await runs.replace(expected, next) }
     return { value: await runs.query(500), revert: { label: 'Restore backup history entry', run: restore(after, before), reapply: restore(before, after) } }
   }
-  const planWithout = (selected: Profile, skipFolders: readonly string[] = []) => {
+  const planWithout = (selected: Profile, skipFolders: readonly string[] = [], doneDestinations: readonly string[] = []) => {
     const plan = mirrorPlan(selected)
-    return { ...plan, mappings: plan.mappings.filter((mapping) => !skipFolders.includes(mapping.source) && !skipFolders.includes(mapping.destination)) }
+    return { ...plan, mappings: plan.mappings.filter((mapping) => !skipFolders.includes(mapping.source) && !skipFolders.includes(mapping.destination) && !doneDestinations.includes(mapping.destination)) }
   }
   /** Paths of the ticked folders that do not exist right now. */
   const missingFolders = async (profileId?: string): Promise<string[]> => {
@@ -141,10 +143,10 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const result = await client.missingFolders(mirrorPlan(profile(profileId)))
     return result.ok ? result.data ?? [] : []
   }
-  const check = (profileId?: string, context?: CommandContext, skipFolders?: readonly string[]) => {
+  const check = (profileId?: string, context?: CommandContext, skipFolders?: readonly string[], doneDestinations?: readonly string[]) => {
     assertActive()
     store.assertClean()
-    const plan = planWithout(profile(profileId), skipFolders)
+    const plan = planWithout(profile(profileId), skipFolders, doneDestinations)
     const checkController = new AbortController()
     const disconnect = connectCancellation(checkController, context)
     const task: ReturnType<typeof client.check> = (async () => {
@@ -180,7 +182,7 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     store.assertClean()
     if (running) throw refused('BACKUP_RUNNING', 'A backup is already running. Check backup:status before starting another.')
     const selected = { ...profile(profileId) }
-    const plan = planWithout(selected, options.skipFolders)
+    const plan = planWithout(selected, options.skipFolders, options.doneDestinations)
     if (context?.cancellation?.aborted) return { ok: false, error: 'Backup operation cancelled' }
     const acceptedClient = context?.operation ? backupApi(api.forOperation(context.operation)) : client
     const trigger = options.trigger ?? (context ? 'automation' : 'manual')
@@ -228,11 +230,16 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     controller.abort()
     return true
   }
-  /** Stop the running backup wherever it started: this window, another caller, a schedule or a workflow. */
+  /**
+   * Stop the running backup wherever it started: this window, another caller, a schedule or a workflow.
+   * The engine is asked first, so the caller's run returns once the engine has really ended, with what it copied.
+   * Aborting the call instead is only for a run the engine has not accepted yet.
+   */
   const stop = async (): Promise<boolean> => {
-    if (cancel()) return true
     if (!isActive()) throw Object.assign(new Error('Backup session is no longer active'), { code: 'BACKUP_INACTIVE', outcome: 'not-applied' })
     const stopped = await client.stop()
+    if (stopped.ok && stopped.data === true) return true
+    if (cancel()) return true
     if (!stopped.ok) throw Object.assign(new Error(`Could not reach the backup engine: ${stopped.error}. Check backup:status and backup:history before retrying.`), { code: 'BACKUP_STOP_UNAVAILABLE', outcome: 'unknown' })
     return stopped.data === true
   }

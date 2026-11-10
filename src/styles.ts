@@ -218,6 +218,9 @@ export const CSS = `
 .backup-run:disabled { opacity: 0.6; cursor: default; }
 .backup-run svg { width: 15px; height: 15px; }
 .backup-run:focus:not(:focus-visible) { outline: none; }
+.backup-run-choice { display: flex; gap: var(--space-2); }
+.backup-run-choice > .backup-run { flex: 2 1 0; width: auto; min-width: 0; }
+.backup-run-choice > .backup-btn { flex: 1 1 0; min-width: 0; }
 
 /* ---- Schedule line ------------------------------------------------------ */
 .backup-schedule {

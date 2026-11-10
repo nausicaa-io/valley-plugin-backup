@@ -22,7 +22,7 @@ function fixture() {
     check: vi.fn(async () => ({ ok: true as const, data: { ok: true, issues: [] } })),
     run: vi.fn(async () => ({ ok: true as const, data: { ok: true, mappings: 1, archived: 2, durationSec: 3, errors: 0 } })),
     history: vi.fn((limit = 50) => history.query(limit)),
-    cancel: vi.fn(() => true)
+    stop: vi.fn(async () => true)
   }
   const state = createBackupPanelState(mock.api, ports)
   disposers.push(state.dispose)
@@ -109,11 +109,62 @@ it('appends batched log lines and reports a stopped run without failing it', asy
   expect(f.state.getSnapshot().lines).toEqual(['▸ Syncing: field', '  a.md', '  b.md'])
   expect(f.state.getSnapshot().progress?.files).toEqual({ done: 2, total: 5 })
   f.state.stop()
-  expect(f.ports.cancel).toHaveBeenCalledOnce()
+  f.state.stop()
+  expect(f.ports.stop).toHaveBeenCalledOnce()
   finish({ ok: true, data: { ok: false, cancelled: true, mappings: 1, archived: 1, copied: 2, durationSec: 1, errors: 0 } })
   await task
   expect(f.state.getSnapshot()).toMatchObject({ status: 'stopped', summary: 'Stopped — 2 copied, 1 archived', progress: null })
   expect(f.state.getSnapshot().mappingResults).toEqual([expect.objectContaining({ folder: 'field', status: 'stopped' })])
+  off()
+})
+
+it('resumes a stopped run with the folders left and Cancel returns to a fresh start', async () => {
+  const f = fixture()
+  f.ports.profile.mockReturnValue(parseProfiles({ profiles: [{ id: 'field', name: 'Field', mappings: [{ source: '/fixtures/a', destination: '/backups/a' }, { source: '/fixtures/b', destination: '/backups/b' }] }] })[0])
+  const progress = vi.mocked(f.api.backend.on).mock.calls.find(([event]) => event === 'progress')![1]
+  const a = { folder: 'a', source: '/fixtures/a', destination: '/backups/a' }, b = { folder: 'b', source: '/fixtures/b', destination: '/backups/b' }
+  const stopRun = async (task: Promise<void>, finish: () => (value: unknown) => void): Promise<void> => {
+    await vi.waitFor(() => expect(f.state.getSnapshot().status).toBe('running'))
+    f.state.stop()
+    finish()({ ok: true, data: { ok: false, cancelled: true, mappings: 2, archived: 0, copied: 1, durationSec: 1, errors: 0 } })
+    await task
+  }
+  let finish!: (value: unknown) => void
+  const held = () => new Promise((resolve) => { finish = resolve as (value: unknown) => void }) as never
+  f.ports.run.mockImplementationOnce(held)
+  const off = f.state.subscribe(vi.fn())
+  const first = f.state.start('field')
+  await vi.waitFor(() => expect(f.ports.run).toHaveBeenCalledOnce())
+  progress({ mapping: { index: 1, ...a, status: 'done' } })
+  progress({ mapping: { index: 2, ...b, status: 'running' } })
+  await stopRun(first, () => finish)
+  expect(f.state.getSnapshot()).toMatchObject({ status: 'stopped', resumeProfileId: 'field' })
+
+  f.ports.run.mockImplementationOnce(held)
+  const resumed = f.state.start('field', { resume: true })
+  await vi.waitFor(() => expect(f.ports.run).toHaveBeenCalledTimes(2))
+  expect(f.ports.check).toHaveBeenLastCalledWith('field', undefined, [], ['/backups/a'])
+  expect(f.ports.run).toHaveBeenLastCalledWith('field', true, undefined, { skipFolders: [], doneDestinations: ['/backups/a'] })
+  expect(f.state.getSnapshot().mappingResults).toEqual([expect.objectContaining({ destination: '/backups/a', status: 'done' })])
+  progress({ mapping: { index: 1, ...b, status: 'running' } })
+  expect(f.state.getSnapshot().mappingResults.map(item => [item.destination, item.status])).toEqual([['/backups/a', 'done'], ['/backups/b', 'running']])
+  await stopRun(resumed, () => finish)
+
+  f.state.discardStopped()
+  expect(f.state.getSnapshot()).toMatchObject({ status: 'idle', summary: '', mappingResults: [], resumeProfileId: null })
+  await f.state.start('field')
+  expect(f.ports.run).toHaveBeenLastCalledWith('field', true, undefined, { skipFolders: [], doneDestinations: [] })
+  off()
+})
+
+it('stays resumable when a resumed run finds its drive gone', async () => {
+  const f = fixture()
+  f.ports.run.mockResolvedValueOnce({ ok: true, data: { ok: false, cancelled: true, mappings: 1, archived: 0, durationSec: 1, errors: 0 } } as never)
+  const off = f.state.subscribe(vi.fn())
+  await f.state.start('field')
+  f.ports.check.mockResolvedValueOnce({ ok: true, data: { ok: false, issues: [{ kind: 'drive-not-mounted', message: 'Plug in the drive' }] } } as never)
+  await f.state.start('field', { resume: true })
+  expect(f.state.getSnapshot()).toMatchObject({ status: 'stopped', resumeProfileId: 'field', issues: [{ message: 'Plug in the drive' }] })
   off()
 })
 
