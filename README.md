@@ -26,7 +26,9 @@ Open **Settings → Backup** to configure a profile. Archive and log locations a
 
 Rename each folder pair using its name field. Add folder paths relative to Source and file patterns in **Exclude**, one rule at a time with Enter (for example `cache/` or `*.tmp`). Remove individual rules with ×.
 
-A destination cannot sit inside its source, or the other way round. Archive and log folders placed inside a source or destination are excluded from the mirror automatically.
+The Backup panel shows every folder pair of the selected profile, each with a checkbox that includes it in runs and folder buttons that show its source and destination in the file manager; two option rows sit above them. Before a manual run, every ticked folder's source and destination must exist; a pair with a missing folder shows unticked and is skipped for that run, and its saved tick stays. Scheduled runs keep waiting for a missing drive. The first, **Keep deleted files**, moves changed and deleted destination files to the archive folder; turned off, they are removed permanently. The second, **Write log**, writes the run log and master log; turned off, neither is written.
+
+A destination cannot sit inside its source, or the other way round, two pairs cannot share a destination, and system folders, home folders and whole drives are refused. Archive and log folders placed inside a source or destination are excluded from the mirror automatically. A run changes nothing in a folder pair when any folder cannot be read or when the source is empty while its backup is not.
 
 ## Requirements and updates
 

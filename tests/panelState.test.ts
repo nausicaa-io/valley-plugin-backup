@@ -18,6 +18,7 @@ function fixture() {
   const ports = {
     isActive: vi.fn(() => true),
     profile: vi.fn(() => profile),
+    missingFolders: vi.fn(async () => [] as string[]),
     check: vi.fn(async () => ({ ok: true as const, data: { ok: true, issues: [] } })),
     run: vi.fn(async () => ({ ok: true as const, data: { ok: true, mappings: 1, archived: 2, durationSec: 3, errors: 0 } })),
     history: vi.fn((limit = 50) => history.query(limit)),

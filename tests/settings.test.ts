@@ -225,10 +225,89 @@ describe('Backup schedule and stop', () => {
   it('shows when the selected profile backs up next', async () => {
     const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ schedule: { every: 'daily', time: '02:00', since: Date.now() } }) })
     const next = new Date(); next.setDate(next.getDate() + 1); next.setHours(2, 0, 0, 0)
-    api.backend.call = vi.fn(async () => ({ field: { nextAt: next.getTime(), waiting: null } })) as unknown as typeof api.backend.call
+    api.backend.call = vi.fn(async () => ({ field: { nextAt: next.getTime(), waiting: null } })) as unknown as unknown as typeof api.backend.call
     const dispose = register(api)
     render(React.createElement(viewOf(api, 'backup.panel')))
     expect(await screen.findByText(/^Next backup (today|tomorrow) 02:00$/)).toBeInTheDocument()
+    await dispose()
+  })
+
+  it('switches the deleted-files and log options per profile and lists every folder pair', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ trashPath: '/backups/deleted-files', logDirectory: '/backups/logs', mappings: [{ source: '/fixtures/ferns', destination: '/backups/ferns' }, { name: 'Mosses', source: '/fixtures/moss', destination: '/backups/moss' }] }) })
+    const saved = () => (api.settings.get().profiles as Array<{ noArchive?: boolean; noLogs?: boolean }>)[0]
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    const keep = await screen.findByRole('checkbox', { name: 'Keep deleted files' })
+    const log = screen.getByRole('checkbox', { name: 'Write log' })
+    expect(keep).toBeChecked()
+    expect(log).toBeChecked()
+    expect(screen.getByDisplayValue('/backups/deleted-files')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('/backups/logs')).toBeInTheDocument()
+    expect(screen.getByText('ferns')).toBeInTheDocument()
+    expect(screen.getByText('/fixtures/moss')).toBeInTheDocument()
+    expect(screen.getByText('/backups/moss')).toBeInTheDocument()
+    expect(screen.getByText('Mosses')).toBeInTheDocument()
+
+    fireEvent.click(keep)
+    await waitFor(() => expect(saved().noArchive).toBe(true))
+    expect(await screen.findByText('Changed and deleted files are removed permanently.')).toBeInTheDocument()
+    fireEvent.click(log)
+    await waitFor(() => expect(saved().noLogs).toBe(true))
+    expect(mirrorPlan(parseProfiles(api.settings.get())[0])).toMatchObject({ noArchive: true, noLogs: true })
+    expect(serializeProfile(parseProfiles(api.settings.get())[0])).toMatchObject({ noArchive: true, noLogs: true })
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Keep deleted files' }))
+    await waitFor(() => expect(saved().noArchive).toBeUndefined())
+    expect(screen.queryByText('Changed and deleted files are removed permanently.')).not.toBeInTheDocument()
+    await dispose()
+  })
+
+  it('skips an unticked folder in runs while restore keeps every folder index', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ mappings: [{ source: '/fixtures/ferns', destination: '/backups/ferns' }, { name: 'Mosses', source: '/fixtures/moss', destination: '/backups/moss' }] }) })
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Include ferns in this backup' }))
+    await waitFor(() => expect((api.settings.get().profiles as Array<{ mappings: Array<{ disabled?: boolean }> }>)[0].mappings[0].disabled).toBe(true))
+    const profile = parseProfiles(api.settings.get())[0]
+    expect(mirrorPlan(profile).mappings.map((mapping) => mapping.source)).toEqual(['/fixtures/moss'])
+    expect(mirrorPlan(profile, false, true).mappings.map((mapping) => mapping.source)).toEqual(['/fixtures/ferns', '/fixtures/moss'])
+    expect(screen.getByRole('button', { name: 'Backup now' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include Mosses in this backup' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backup now' })).toBeDisabled())
+    await dispose()
+  })
+
+  it('shows a missing folder unticked and leaves it out of a manual run without changing the saved tick', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ mappings: [{ source: '/fixtures/ferns', destination: '/backups/ferns' }, { name: 'Mosses', source: '/fixtures/moss', destination: '/backups/moss' }] }) })
+    api.backend.call = vi.fn(async (method: string) => method === 'missingFolders' ? ['/backups/ferns'] : undefined) as unknown as typeof api.backend.call
+    const runs: Array<{ mappings: Array<{ source: string }> }> = []
+    api.backend.callOperation = vi.fn(async (method: string, payload: { plan: { mappings: Array<{ source: string }> } }) => {
+      if (method === 'check') return { ok: true, issues: [] }
+      runs.push(payload.plan)
+      return { ok: true, mappings: 1, archived: 0, copied: 0, durationSec: 0, errors: 0 }
+    }) as unknown as typeof api.backend.callOperation
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup now' }))
+    await waitFor(() => expect(runs).toHaveLength(1))
+    expect(runs[0].mappings.map((mapping) => mapping.source)).toEqual(['/fixtures/moss'])
+    const ferns = await screen.findByRole('checkbox', { name: 'Include ferns in this backup' })
+    expect(ferns).not.toBeChecked()
+    expect(ferns).toBeDisabled()
+    expect(screen.getByText('Folder not found. Skipped.')).toBeInTheDocument()
+    expect((api.settings.get().profiles as Array<{ mappings: Array<{ disabled?: boolean }> }>)[0].mappings[0].disabled).toBeUndefined()
+    await dispose()
+  })
+
+  it('does not start when no selected folder exists', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ mappings: [{ source: '/fixtures/ferns', destination: '/backups/ferns' }] }) })
+    api.backend.call = vi.fn(async (method: string) => method === 'missingFolders' ? ['/fixtures/ferns'] : undefined) as unknown as typeof api.backend.call
+    api.backend.callOperation = vi.fn() as unknown as typeof api.backend.callOperation
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup now' }))
+    expect(await screen.findByText('None of the selected folders were found.')).toBeInTheDocument()
+    expect(api.backend.callOperation).not.toHaveBeenCalled()
     await dispose()
   })
 })
@@ -240,7 +319,7 @@ describe('Backup localization', () => {
     initLocalization(api)
 
     expect(uiText('auto.432e860f10ff')).toBe('备份设置')
-    expect(uiText('auto.0943b157227c')).toBe('—  failure(s)')
+    expect(uiText('auto.8b35536332aa')).toBe(' error(s)')
     expect(uiText('backup.missing')).toBe('backup.missing')
   })
 })
@@ -372,165 +451,5 @@ describe('Backup owns mirror plans', () => {
     expect(api.notifications.notify).not.toHaveBeenCalled()
     operations.dispose()
     store.dispose()
-  })
-})
-
-describe('Backup archive confirmation ownership', () => {
-  const pruneResult = { dropped: ['archive'], kept: 2, errors: [] }
-  const restoreResult = { ok: true, creates: ['new'], updates: ['changed'], deletes: [] }
-  function deferred<T>() {
-    let resolve!: (value: T) => void
-    const promise = new Promise<T>((done) => { resolve = done })
-    return { promise, resolve }
-  }
-  function fixture() {
-    const profiles = [
-      { id: 'forest', name: 'Forest', retention: 'off', mappings: [
-        { source: '/fixtures/ferns', destination: '/backups/ferns', exclude: ['*.tmp'] },
-        { source: '/fixtures/mosses', destination: '/backups/mosses', exclude: [] }
-      ] },
-      { id: 'wetlands', name: 'Wetlands', retention: 'standard', mappings: [{ source: '/fixtures/reeds', destination: '/backups/reeds', exclude: [] }] }
-    ]
-    const mock = createMockValleyApi({ manifest: { id: 'backup' }, settings: { activeProfileId: 'forest', profiles } })
-    const { api } = mock
-    const elements = vi.fn(api.React.createElement)
-    api.React = { ...api.React, createElement: elements as unknown as typeof api.React.createElement }
-    api.backend.callOperation = vi.fn(async (method: string) => method === 'prune' ? pruneResult : restoreResult) as typeof api.backend.callOperation
-    const dispose = register(api)
-    const view = (id: string) => (api.registerView as unknown as { mock: { calls: [string, ComponentType][] } }).mock.calls.find(([name]) => name === id)![1]
-    const rendered = render(React.createElement(view('backup.panel')))
-    fireEvent.click(screen.getByRole('tab', { name: 'Archives' }))
-    const callback = (label: string): (() => void) => {
-      const entry = [...elements.mock.calls].reverse().find((args) => args[0] === 'button' && args[2] === label)
-      expect(entry).toBeDefined()
-      return (entry![1] as { onClick: () => void }).onClick
-    }
-    const select = async (id: string) => {
-      fireEvent.click(screen.getByRole('button', { name: 'Backup profile' }))
-      const item = mock.menus.at(-1)!.find((entry) => 'id' in entry && entry.id === id)
-      if (!item || !('onSelect' in item)) throw new Error('Missing profile menu entry')
-      await act(async () => { item.onSelect?.() })
-    }
-    const preview = async (kind: 'prune' | 'restore') => {
-      fireEvent.click(kind === 'prune' ? screen.getByRole('button', { name: 'Clean up…' }) : screen.getAllByRole('button', { name: 'Restore…' })[1])
-      const label = kind === 'prune' ? 'Remove' : 'Apply restore'
-      await screen.findByRole('button', { name: label })
-      return callback(label)
-    }
-    return { ...mock, profiles, dispose, rendered, view, callback, select, preview }
-  }
-
-  it('shows excluded configuration and missing datasets in both restore preview and result', async () => {
-    const f = fixture()
-    vi.mocked(f.api.backend.callOperation).mockResolvedValue({ ...restoreResult, skipped: ['.valley/', '.valley/plugin-data/field/durable.db'] })
-    const confirm = await f.preview('restore')
-    expect(screen.getByRole('status')).toHaveTextContent('Excluded from this restore: .valley/, .valley/plugin-data/field/durable.db')
-    await act(async () => { confirm() })
-    expect(screen.getByRole('status')).toHaveTextContent('Excluded from this restore: .valley/, .valley/plugin-data/field/durable.db')
-    expect(screen.queryByRole('button', { name: 'Apply restore' })).not.toBeInTheDocument()
-    await f.dispose()
-  })
-
-  it.each(['prune', 'restore'] as const)('rejects a captured %s confirmation after switching away and back', async (kind) => {
-    const f = fixture()
-    const confirm = await f.preview(kind)
-    await f.select('wetlands')
-    await f.select('forest')
-    await act(async () => { confirm() })
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('button', { name: kind === 'prune' ? 'Remove' : 'Apply restore' })).not.toBeInTheDocument()
-    await f.dispose()
-  })
-
-  it.each(['retention', 'mapping', 'reorder'] as const)('permanently invalidates confirmation after a %s edit, including edit then revert', async (change) => {
-    const f = fixture()
-    const confirm = await f.preview(change === 'retention' ? 'prune' : 'restore')
-    const edited = structuredClone(f.profiles)
-    if (change === 'retention') edited[0].retention = 'standard'
-    if (change === 'mapping') edited[0].mappings[1].destination = '/backups/changed'
-    if (change === 'reorder') edited[0].mappings.reverse()
-    await act(async () => { await f.api.settings.set('profiles', edited) })
-    await act(async () => { await f.api.settings.set('profiles', f.profiles) })
-    await act(async () => { confirm() })
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1)
-    await f.dispose()
-  })
-
-  it.each(['prune', 'restore'] as const)('applies the exact previewed %s plan once even if confirmation is invoked twice', async (kind) => {
-    const f = fixture()
-    const confirm = await f.preview(kind)
-    const previewPayload = vi.mocked(f.api.backend.callOperation).mock.calls[0][1]
-    const held = deferred<unknown>()
-    vi.mocked(f.api.backend.callOperation).mockImplementationOnce(() => held.promise)
-    await act(async () => { confirm(); confirm() })
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(2)
-    const [method, payload, options] = vi.mocked(f.api.backend.callOperation).mock.calls[1]
-    expect(method).toBe(kind === 'prune' ? 'prune' : 'restoreApply')
-    expect(payload).toEqual(kind === 'prune' ? { ...(previewPayload as object), dryRun: false } : previewPayload)
-    expect(options?.cancellation?.aborted).toBe(false)
-    if (kind === 'restore') expect(payload).toMatchObject({ mappingIndex: 1, plan: { retention: null } })
-    await act(async () => { held.resolve(kind === 'prune' ? pruneResult : restoreResult) })
-    await f.dispose()
-  })
-
-  it.each(['selection', 'realm', 'unmount'] as const)('aborts a delayed preview on %s change and suppresses its late confirmation', async (change) => {
-    const f = fixture()
-    const held = deferred<unknown>()
-    vi.mocked(f.api.backend.callOperation).mockImplementationOnce(() => held.promise)
-    fireEvent.click(screen.getByRole('button', { name: 'Clean up…' }))
-    await waitFor(() => expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1))
-    const signal = vi.mocked(f.api.backend.callOperation).mock.calls[0][2]?.cancellation
-    if (change === 'selection') await f.select('wetlands')
-    if (change === 'realm') act(() => f.emitState({ realm: { path: '/fixtures/other', name: 'other', displayName: 'Other' } }))
-    if (change === 'unmount') f.rendered.unmount()
-    expect(signal?.aborted).toBe(true)
-    await act(async () => { held.resolve(pruneResult) })
-    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1)
-    await f.dispose()
-  })
-
-  it('revokes cancelled confirmation callbacks without submitting maintenance', async () => {
-    const f = fixture()
-    const confirm = await f.preview('restore')
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    await act(async () => { confirm() })
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('button', { name: 'Apply restore' })).not.toBeInTheDocument()
-    await f.dispose()
-  })
-
-  it('joins an accepted apply during disposal without removing a replacement registration’s styles', async () => {
-    const f = fixture()
-    const confirm = await f.preview('restore')
-    const held = deferred<unknown>()
-    vi.mocked(f.api.backend.callOperation).mockImplementationOnce(() => held.promise)
-    await act(async () => { confirm() })
-    let drained = false
-    const disposal = f.dispose()
-    expect(f.dispose()).toBe(disposal)
-    void disposal.then(() => { drained = true })
-    expect(vi.mocked(f.api.backend.callOperation).mock.calls[1][2]?.cancellation?.aborted).toBe(true)
-    const replacement = register(f.api)
-    await act(async () => { await Promise.resolve() })
-    expect(drained).toBe(false)
-    await act(async () => { held.resolve(restoreResult); await disposal })
-    expect(document.querySelectorAll('#notes-backup-styles')).toHaveLength(1)
-    expect(screen.queryByText(/^Restored 2 file\(s\)/)).not.toBeInTheDocument()
-    expect(f.api.backend.callOperation).toHaveBeenCalledTimes(2)
-    await replacement()
-  })
-
-  it('handles dirty profile drafts without dispatching a preview', async () => {
-    const f = fixture()
-    render(React.createElement(f.view('backup.settings')))
-    fireEvent.click(screen.getByRole('button', { name: /Forest.*Folders/ }))
-    await act(async () => {
-      fireEvent.change(screen.getByRole('textbox', { name: 'Profile name 1' }), { target: { value: 'Unsaved forest' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Clean up…' }))
-    })
-    expect(screen.getByText('Cleanup failed')).toBeInTheDocument()
-    expect(f.api.backend.callOperation).not.toHaveBeenCalled()
-    await f.dispose()
   })
 })

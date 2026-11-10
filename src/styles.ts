@@ -223,6 +223,7 @@ export const CSS = `
   box-shadow: inset 0 0 0 1px var(--border-medium);
 }
 .backup-run--stop:hover { filter: none; background: var(--container-color-light); }
+.backup-run:focus:not(:focus-visible) { outline: none; }
 
 /* ---- Schedule line ------------------------------------------------------ */
 .backup-schedule {
@@ -257,18 +258,6 @@ export const CSS = `
 }
 .backup-btn:hover:not(:disabled) { background: var(--hover-bg); color: var(--title-color); }
 .backup-btn:disabled { opacity: 0.45; cursor: default; }
-.backup-btn--accent {
-  border-color: transparent;
-  background: var(--accent-tint-bg);
-  color: var(--accent-tint-text);
-}
-.backup-btn--accent:hover:not(:disabled) { background: var(--accent-tint-bg); filter: brightness(1.1); }
-.backup-btn--quiet {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-secondary);
-}
-.backup-btn--wide { flex: 1 1 auto; }
 
 /* ---- Progress ----------------------------------------------------------- */
 .backup-progress { display: flex; flex-direction: column; gap: var(--space-1); }
@@ -294,6 +283,13 @@ export const CSS = `
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+.backup-progress-status {
+  font-size: var(--smaller-font-size);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .backup-progress-counts {
   font-size: var(--smaller-font-size);
   color: var(--text-tertiary);
@@ -314,12 +310,95 @@ export const CSS = `
 }
 .backup-status.is-done { color: var(--positive-color); }
 .backup-status.is-failed { color: var(--negative-color); }
-.backup-status span {
+.backup-status span { min-width: 0; overflow-wrap: anywhere; }
+.backup-status svg { width: 14px; height: 14px; flex: none; }
+
+/* ---- Checkbox + folder button + path rows ------------------------------ */
+.backup-options { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.backup-option { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.backup-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+.backup-check:disabled { cursor: default; opacity: 0.5; }
+.backup-path { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.backup-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.backup-reveal:hover:not(:disabled) { background: var(--hover-bg); color: var(--title-color); }
+.backup-reveal:disabled { cursor: default; opacity: 0.4; }
+.backup-reveal svg { width: 13px; height: 13px; }
+.backup-path-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--smaller-font-size);
+  color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.backup-status svg { width: 14px; height: 14px; flex: none; }
+.backup-path-input {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--space-2);
+  box-sizing: border-box;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: transparent;
+  color: var(--text-color);
+  font-family: inherit;
+  font-size: var(--smaller-font-size);
+  text-overflow: ellipsis;
+}
+.backup-path-input:focus { border-color: var(--accent-color); }
+.backup-path-input::placeholder { color: var(--text-tertiary); }
+.backup-path-input:disabled { color: var(--text-tertiary); opacity: 0.6; }
+
+/* The path rows' 22px button sits 4px left so its glyph centres under the checkbox
+   and the path text lines up with the folder name. */
+.backup-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-light);
+}
+.backup-rows > .backup-folder:first-child { border-top: none; padding-top: 0; }
+.backup-folder > .backup-path { margin-left: -4px; }
+.backup-path.is-missing .backup-path-text { color: var(--negative-color); }
+.backup-folder-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; min-height: 22px; }
+.backup-folder-head .backup-row-label { flex: 1 1 auto; min-width: 0; }
+.backup-folder.is-off .backup-row-label,
+.backup-folder.is-off .backup-path-text { color: var(--text-tertiary); opacity: 0.6; }
+.backup-folder-reason {
+  padding-left: 22px;
+  font-size: var(--smaller-font-size);
+  color: var(--negative-color);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
 
 /* ---- Section heads ------------------------------------------------------ */
 .backup-section {
@@ -378,7 +457,6 @@ export const CSS = `
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
-.backup-row-actions { display: flex; align-items: center; gap: var(--space-1); flex: none; }
 
 /* ---- Alert (pre-flight issues) ------------------------------------------ */
 /* The sidebar is 245px at its narrowest: the card must shrink (min-width:0) and
@@ -411,24 +489,6 @@ export const CSS = `
 .backup-alert-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .backup-alert-actions > .backup-btn { flex: 1 1 auto; min-width: 0; }
 
-/* ---- Inline confirm cards (prune / restore) ----------------------------- */
-.backup-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: var(--space-3);
-  border-radius: var(--radius);
-  background: var(--container-color-light);
-}
-.backup-card-text {
-  font-size: var(--smaller-font-size);
-  color: var(--title-color);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-.backup-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.backup-card-actions > .backup-btn { flex: 1 1 auto; min-width: 0; }
 .backup-note { font-size: var(--smaller-font-size); color: var(--text-tertiary); line-height: 1.45; }
 
 /* ---- Empty states -------------------------------------------------------- */

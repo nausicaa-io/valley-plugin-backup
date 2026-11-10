@@ -17,6 +17,8 @@ export interface RunOptions {
   trigger?: RunTrigger
   /** A deterministic history id claims the run: a second insert of it fails. */
   runId?: string
+  /** Folders found missing just before this run; their pairs are left out of it. */
+  skipFolders?: readonly string[]
 }
 /** History reason of a run that started but never recorded an outcome. */
 export const RUN_INTERRUPTED = 'interrupted'
@@ -48,10 +50,11 @@ const scheduleFields = {
 }
 const profileFields = {
   name: { type: 'string', minLength: 1 },
-  mappings: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, source: { type: 'string' }, destination: { type: 'string' }, exclude: { type: 'array', items: { type: 'string' } } }, required: ['source', 'destination'], additionalProperties: false } },
+  mappings: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, source: { type: 'string' }, destination: { type: 'string' }, exclude: { type: 'array', items: { type: 'string' } }, disabled: { type: 'boolean' } }, required: ['source', 'destination'], additionalProperties: false } },
   trashPath: { type: 'string' }, logDirectory: { type: 'string' }, masterLog: { type: 'string' },
   retention: { type: 'string', enum: ['standard', 'off'] },
-  schedule: { type: 'object', properties: scheduleFields, additionalProperties: false }
+  schedule: { type: 'object', properties: scheduleFields, additionalProperties: false },
+  noArchive: { type: 'boolean' }, noLogs: { type: 'boolean' }
 }
 
 function schedulePatch(raw: unknown): Record<string, unknown> {
@@ -76,9 +79,11 @@ function profilePatch(raw: unknown): Record<string, unknown> {
         if (typeof mapping.source !== 'string' || typeof mapping.destination !== 'string') throw refused('INVALID_INPUT', 'A mapping requires source and destination paths')
         if (mapping.name !== undefined && typeof mapping.name !== 'string') throw refused('INVALID_INPUT', 'Mapping name must be a string')
         if (mapping.exclude !== undefined && (!Array.isArray(mapping.exclude) || !mapping.exclude.every((item) => typeof item === 'string'))) throw refused('INVALID_INPUT', 'Mapping exclusions must be strings')
-        if (Object.keys(mapping).some((field) => !['name', 'source', 'destination', 'exclude'].includes(field))) throw refused('INVALID_INPUT', 'Unknown mapping field')
+        if (mapping.disabled !== undefined && typeof mapping.disabled !== 'boolean') throw refused('INVALID_INPUT', 'Mapping disabled must be true or false')
+        if (Object.keys(mapping).some((field) => !['name', 'source', 'destination', 'exclude', 'disabled'].includes(field))) throw refused('INVALID_INPUT', 'Unknown mapping field')
       }
     } else if (key === 'schedule') schedulePatch(value)
+    else if (key === 'noArchive' || key === 'noLogs') { if (typeof value !== 'boolean') throw refused('INVALID_INPUT', `${key} must be true or false`) }
     else if (key === 'retention' && value !== 'standard' && value !== 'off') throw refused('INVALID_INPUT', 'retention must be standard or off')
     else if (typeof value !== 'string' || (key === 'name' && !value.trim())) throw refused('INVALID_INPUT', `Invalid ${key}`)
   }
@@ -125,10 +130,21 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const restore = (expected: RunRecord[], next: RunRecord[]) => async () => { assertActive(); await runs.replace(expected, next) }
     return { value: await runs.query(500), revert: { label: 'Restore backup history entry', run: restore(after, before), reapply: restore(before, after) } }
   }
-  const check = (profileId?: string, context?: CommandContext) => {
+  const planWithout = (selected: Profile, skipFolders: readonly string[] = []) => {
+    const plan = mirrorPlan(selected)
+    return { ...plan, mappings: plan.mappings.filter((mapping) => !skipFolders.includes(mapping.source) && !skipFolders.includes(mapping.destination)) }
+  }
+  /** Paths of the ticked folders that do not exist right now. */
+  const missingFolders = async (profileId?: string): Promise<string[]> => {
     assertActive()
     store.assertClean()
-    const plan = mirrorPlan(profile(profileId))
+    const result = await client.missingFolders(mirrorPlan(profile(profileId)))
+    return result.ok ? result.data ?? [] : []
+  }
+  const check = (profileId?: string, context?: CommandContext, skipFolders?: readonly string[]) => {
+    assertActive()
+    store.assertClean()
+    const plan = planWithout(profile(profileId), skipFolders)
     const checkController = new AbortController()
     const disconnect = connectCancellation(checkController, context)
     const task: ReturnType<typeof client.check> = (async () => {
@@ -164,7 +180,7 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     store.assertClean()
     if (running) throw refused('BACKUP_RUNNING', 'A backup is already running. Check backup:status before starting another.')
     const selected = { ...profile(profileId) }
-    const plan = mirrorPlan(selected)
+    const plan = planWithout(selected, options.skipFolders)
     if (context?.cancellation?.aborted) return { ok: false, error: 'Backup operation cancelled' }
     const acceptedClient = context?.operation ? backupApi(api.forOperation(context.operation)) : client
     const trigger = options.trigger ?? (context ? 'automation' : 'manual')
@@ -267,7 +283,7 @@ export function createBackupOperations(api: ValleyPluginApi, store: ProfileStore
     const progress = value.progress && typeof value.progress === 'object' && !Array.isArray(value.progress) ? value.progress as MirrorProgress : null
     return { running: true, profileId: typeof value.profileId === 'string' ? value.profileId : local.profileId, progress: progress ?? (running ? local.progress : null) }
   }
-  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention) }, history, removeHistory, check, run, cancel, stop, replace, update, isActive, assertActive, status, dispose }
+  return { profile, plan: (profileId?: string, forceRetention = false) => { store.assertClean(); return mirrorPlan(profile(profileId), forceRetention, true) }, history, removeHistory, missingFolders, check, run, cancel, stop, replace, update, isActive, assertActive, status, dispose }
 }
 
 export function registerBackupCommands(api: ValleyPluginApi, store: ProfileStore, operations: ReturnType<typeof createBackupOperations>, schedules: () => unknown = () => ({})): () => Promise<void> {

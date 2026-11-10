@@ -1,7 +1,8 @@
 import { t } from './localization'
-import { dirname, join, relative, sep } from './path'
+import { basename, dirname, join, relative, sep } from './path'
 import type { StorageFs, StorageDirent } from './storageFs'
 import { MirrorCancelled } from './jobLifetime'
+import { formatBytes } from '../format'
 
 /**
  * The mirror engine behind the backup plugin — a native replacement for the
@@ -49,6 +50,8 @@ export interface MirrorOptions {
   dryRun?: boolean
   /** Consistent staged files exposed at their original source-relative paths. */
   sourceOverrides?: ReadonlyMap<string, string>
+  /** Free bytes on the destination's volume, or null when that is unknown. */
+  freeBytes?: () => Promise<number | null>
 }
 
 export interface MirrorTick {
@@ -79,17 +82,26 @@ export interface MirrorOutcome extends MirrorChanges {
 
 /** fnmatch-style glob (only `*`, matching across separators) used for excludes. */
 export function globMatch(text: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
-  return new RegExp(`^${escaped}$`).test(text)
+  let compiled = compiledGlobs.get(pattern)
+  if (!compiled) {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+    compiled = new RegExp(`^${escaped}$`, 's')
+    compiledGlobs.set(pattern, compiled)
+  }
+  return compiled.test(text)
 }
+
+const compiledGlobs = new Map<string, RegExp>()
 
 /** Whether a source-relative path is excluded. Trailing-slash form matches dirs. */
 export function isExcluded(relPath: string, excludes: readonly string[]): boolean {
   return excludes.some((p) => globMatch(relPath, p) || globMatch(`${relPath}/`, p))
 }
 
-/** One entry of a scanned tree, keyed by POSIX-style relative path. */
+/** One entry of a scanned tree, keyed by its NFC-normalized relative path. */
 interface Entry {
+  /** The relative path as spelled on disk, which every file operation uses. */
+  rel: string
   kind: 'file' | 'dir' | 'symlink'
   size: number
   mtimeMs: number
@@ -101,10 +113,23 @@ function toRel(root: string, abs: string): string {
   return relative(root, abs).split(sep).join('/')
 }
 
+interface Scan {
+  entries: Map<string, Entry>
+  /** One `path: message` per folder or link that exists but could not be read. */
+  errors: string[]
+}
+
 /**
- * Walk a tree into a `relPath → Entry` map. Excluded paths are skipped, and an
- * excluded directory is not descended into. A missing root yields an empty map
- * — the caller (preflight) is what decides whether that is an error.
+ * Walk a tree into a `normalized path → Entry` map, one level at a time with up
+ * to `width` listings in flight. Excluded paths are skipped, and an excluded
+ * directory is not descended into. A missing root yields an empty map — the
+ * caller (preflight) is what decides whether that is an error.
+ *
+ * Keys are NFC because macOS and exFAT can spell one name differently, which
+ * would otherwise read as a delete plus a create on every run.
+ *
+ * A folder that exists but cannot be read is reported, never skipped: its
+ * contents would be missing from the map, and the plan would delete them.
  *
  * `onExcluded` reports every path that was skipped. The delete side needs it:
  * an excluded file is absent from the map, so the directory holding it looks
@@ -114,46 +139,63 @@ async function scanTree(
   fs: StorageFs,
   root: string,
   excludes: readonly string[],
+  width: number,
   onExcluded: (rel: string) => void = () => {}
-): Promise<Map<string, Entry>> {
-  const out = new Map<string, Entry>()
-
-  async function walk(absDir: string): Promise<void> {
-    let entries: StorageDirent[]
-    try {
-      entries = await fs.readdir(absDir, { withFileTypes: true })
-    } catch (error) {
-      if (error instanceof MirrorCancelled) throw error
-      return
-    }
-    for (const dirent of entries) {
-      fs.assertActive()
-      const abs = join(absDir, dirent.name)
-      const rel = toRel(root, abs)
-      if (!rel) continue
-      if (isExcluded(rel, excludes)) {
-        onExcluded(rel)
-        continue
-      }
-      // Listing entries are lstat results: a symlink is mirrored as a link, not
-      // as the file it points at — following them would copy a tree twice, or forever.
-      if (dirent.isSymbolicLink()) {
-        const target = await fs.readlink(abs).catch((error) => { if (error instanceof MirrorCancelled) throw error; return null })
-        if (target === null) continue
-        out.set(rel, { kind: 'symlink', size: 0, mtimeMs: dirent.mtimeMs, target })
-        continue
-      }
-      if (dirent.isDirectory()) {
-        out.set(rel, { kind: 'dir', size: 0, mtimeMs: dirent.mtimeMs })
-        await walk(abs)
-        continue
-      }
-      if (dirent.isFile()) out.set(rel, { kind: 'file', size: dirent.size, mtimeMs: dirent.mtimeMs })
-    }
+): Promise<Scan> {
+  const entries = new Map<string, Entry>()
+  const errors: string[] = []
+  const unreadable = (path: string, error: unknown): void => {
+    if (error instanceof MirrorCancelled) throw error
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') errors.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
   }
-
-  await walk(root)
-  return out
+  try {
+    await fs.stat(root)
+  } catch (error) {
+    unreadable(root, error)
+    return { entries, errors }
+  }
+  let level = [root]
+  while (level.length) {
+    const next: string[] = []
+    await pool(level, width, async (absDir) => {
+      let listing: StorageDirent[]
+      try {
+        listing = await fs.readdir(absDir, { withFileTypes: true })
+      } catch (error) {
+        unreadable(absDir, error)
+        return
+      }
+      for (const dirent of listing) {
+        fs.assertActive()
+        const abs = join(absDir, dirent.name)
+        const rel = toRel(root, abs)
+        if (!rel) continue
+        const key = rel.normalize('NFC')
+        if (isExcluded(key, excludes)) {
+          onExcluded(key)
+          continue
+        }
+        // Listing entries are lstat results: a symlink is mirrored as a link, not
+        // as the file it points at — following them would copy a tree twice, or forever.
+        if (dirent.isSymbolicLink()) {
+          try {
+            entries.set(key, { rel, kind: 'symlink', size: 0, mtimeMs: dirent.mtimeMs, target: await fs.readlink(abs) })
+          } catch (error) {
+            unreadable(abs, error)
+          }
+          continue
+        }
+        if (dirent.isDirectory()) {
+          entries.set(key, { rel, kind: 'dir', size: 0, mtimeMs: dirent.mtimeMs })
+          next.push(abs)
+          continue
+        }
+        if (dirent.isFile()) entries.set(key, { rel, kind: 'file', size: dirent.size, mtimeMs: dirent.mtimeMs })
+      }
+    })
+    level = next
+  }
+  return { entries, errors }
 }
 
 /**
@@ -326,17 +368,21 @@ async function escrow(fs: StorageFs, destRoot: string, backupDir: string, rel: s
  * Copy one source entry over the destination, preserving mtime. Parents already
  * exist: directories are created shallow-first before any file is copied, and
  * an update replaces an entry whose parent survived.
+ *
+ * A file is written beside its target and renamed into place, so a copy that
+ * dies halfway never leaves a truncated file under the real name. `destRel` is
+ * the spelling the destination already uses for an update.
  */
 async function copyEntry(
   fs: StorageFs,
   sourceRoot: string,
   destRoot: string,
-  rel: string,
   entry: Entry,
-  sourceOverrides?: ReadonlyMap<string, string>
+  sourceOverrides?: ReadonlyMap<string, string>,
+  destRel = entry.rel
 ): Promise<void> {
-  const from = sourceOverrides?.get(rel) ?? join(sourceRoot, ...rel.split('/'))
-  const to = join(destRoot, ...rel.split('/'))
+  const from = sourceOverrides?.get(entry.rel) ?? join(sourceRoot, ...entry.rel.split('/'))
+  const to = join(destRoot, ...destRel.split('/'))
   if (entry.kind === 'dir') {
     await fs.mkdir(to, { recursive: true })
     return
@@ -348,21 +394,44 @@ async function copyEntry(
     await fs.symlink(entry.target ?? '', to, 'junction')
     return
   }
-  await fs.copyFile(from, to)
   // rsync -a preserves times, and the next run's quick check depends on it. The
   // copy itself already landed, so a stamp lost to cancellation only means the
   // next run copies this file once more; it must not disown the copy.
+  const stamp = async (path: string): Promise<void> => {
+    try {
+      await fs.utimes(path, new Date(), new Date(entry.mtimeMs))
+    } catch {
+      // best-effort stamp
+    }
+  }
+  if (new TextEncoder().encode(basename(to)).length + STAGED_SUFFIX.length > MAX_NAME_BYTES) {
+    await fs.copyFile(from, to)
+    await stamp(to)
+    return
+  }
+  const staged = `${to}${STAGED_SUFFIX}`
   try {
-    await fs.utimes(to, new Date(), new Date(entry.mtimeMs))
-  } catch {
-    // best-effort stamp
+    await fs.copyFile(from, staged)
+    await stamp(staged)
+    await fs.commit(staged, to)
+  } catch (error) {
+    await fs.rm(staged, { force: true }).catch(() => undefined)
+    throw error
   }
 }
 
 /** How much one planned entry weighs against copied bytes in the progress bar. */
 const ENTRY_WEIGHT = 64 * 1024
 /** Copies and updates in flight at once; directories and deletes stay sequential. */
-const COPY_WORKERS = 4
+const COPY_WORKERS = 8
+/** Folder listings in flight at once while scanning each side. */
+const SOURCE_SCAN_WORKERS = 16
+const DEST_SCAN_WORKERS = 8
+/** Suffix of a file still being written; scans exclude it (see mirrorExcludes). */
+export const STAGED_SUFFIX = '.tmp.backup'
+const MAX_NAME_BYTES = 255
+/** Left free on the destination drive beyond the bytes a run copies. */
+const FREE_SPACE_RESERVE = 256 * 1024 * 1024
 
 /**
  * Run `work` over `items` with at most `width` in flight. Every worker is
@@ -391,7 +460,7 @@ export function createMirrorEngine(fs: StorageFs) {
     onProgress: (progress: MirrorTick) => void = () => {}
   ): Promise<MirrorOutcome> {
     const { source, destination, backupDir, dryRun = false } = opts
-    const exclude = [...opts.exclude]
+    const exclude = opts.exclude.map((pattern) => pattern.normalize('NFC'))
     const sourceOverrides = opts.sourceOverrides ? new Map(opts.sourceOverrides) : undefined
     let archived = 0
     let copied = 0
@@ -401,35 +470,49 @@ export function createMirrorEngine(fs: StorageFs) {
     const empty = { archived: 0, copied: 0, bytes: 0, creates: [], updates: [], deletes: [] }
     try {
       fs.assertActive()
-      let sourceTree: Map<string, Entry>
+      let sourceScan: Scan
       try {
         const stat = await fs.stat(source)
         if (!stat.isDirectory()) {
           const message = t('backend.sourceNotFolder', { path: source })
           return { ok: false, ...empty, errors: [message], message }
         }
-        sourceTree = await scanTree(fs, source, exclude)
+        sourceScan = await scanTree(fs, source, exclude, SOURCE_SCAN_WORKERS)
         for (const [rel, staged] of sourceOverrides ?? []) {
           const stat = await fs.lstat(staged)
           if (!stat.isFile()) throw new Error(t('backend.stagedNotFile', { path: rel }))
           const parts = rel.split('/')
           for (let index = 1; index < parts.length; index++) {
             const parent = parts.slice(0, index).join('/')
-            if (!sourceTree.has(parent)) sourceTree.set(parent, { kind: 'dir', size: 0, mtimeMs: stat.mtimeMs })
+            const key = parent.normalize('NFC')
+            if (!sourceScan.entries.has(key)) sourceScan.entries.set(key, { rel: parent, kind: 'dir', size: 0, mtimeMs: stat.mtimeMs })
           }
-          sourceTree.set(rel, { kind: 'file', size: stat.size, mtimeMs: stat.mtimeMs })
+          sourceScan.entries.set(rel.normalize('NFC'), { rel, kind: 'file', size: stat.size, mtimeMs: stat.mtimeMs })
         }
       } catch (error) {
         if (error instanceof MirrorCancelled) throw error
         const message = t('backend.sourceUnavailable', { path: source })
         return { ok: false, ...empty, errors: [message], message }
       }
+      const sourceTree = sourceScan.entries
       // Excluded destination paths never enter the tree, so the delete side has to
       // be told about them separately or a directory whose only remaining content is
       // excluded gets moved into the escrow along with it.
       const excludedInDest = new Set<string>()
-      const destTree = await scanTree(fs, destination, exclude, (rel) => excludedInDest.add(rel))
+      const destScan = await scanTree(fs, destination, exclude, DEST_SCAN_WORKERS, (rel) => excludedInDest.add(rel))
+      const destTree = destScan.entries
       fs.assertActive()
+      // Both refusals leave the destination untouched: an incomplete scan or an
+      // emptied source would otherwise plan the deletion of everything backed up.
+      const scanErrors = [...sourceScan.errors, ...destScan.errors]
+      if (scanErrors.length) {
+        const message = t('backend.scanFailed', { count: scanErrors.length, error: scanErrors[0] })
+        return { ok: false, ...empty, errors: scanErrors, message }
+      }
+      if (sourceTree.size === 0 && destTree.size > 0) {
+        const message = t('backend.emptySource', { path: source, count: destTree.size })
+        return { ok: false, ...empty, errors: [message], message }
+      }
       plan = planMirror(sourceTree, destTree, exclude)
 
       if (dryRun) return { ok: true, archived: 0, copied: 0, bytes: 0, errors: [], ...plan }
@@ -441,6 +524,13 @@ export function createMirrorEngine(fs: StorageFs) {
       const files = { done: 0, total: plan.creates.length + plan.updates.length + plan.deletes.length }
       const bytes = { done: 0, total: 0 }
       for (const rel of [...plan.creates, ...plan.updates]) bytes.total += sizeOf(rel)
+      // Only copies need room: a run that just deletes has to work on a full drive.
+      const free = bytes.total > 0 && opts.freeBytes ? await opts.freeBytes() : null
+      fs.assertActive()
+      if (free !== null && bytes.total + FREE_SPACE_RESERVE > free) {
+        const message = t('backend.notEnoughSpace', { needed: formatBytes(bytes.total + FREE_SPACE_RESERVE, 'en'), free: formatBytes(free, 'en') })
+        return { ok: false, ...empty, errors: [message], message }
+      }
       const weightTotal = files.total * ENTRY_WEIGHT + bytes.total
       let lastPercent = -1
       let lastEmit = 0
@@ -490,52 +580,57 @@ export function createMirrorEngine(fs: StorageFs) {
       // a doomed directory goes as a unit, which is both what makes the escrow
       // possible at all and one rename instead of thousands.
       for (const root of deletionRoots(plan.deletes, [...destTree.keys(), ...excludedInDest])) {
-        const from = join(destination, ...root.rel.split('/'))
+        const rel = destTree.get(root.rel)?.rel ?? root.rel
+        const from = join(destination, ...rel.split('/'))
         await attempt(
-          root.rel,
+          rel,
           async () => {
             if (backupDir) {
-              await escrow(fs, destination, backupDir, root.rel, escrowDirs)
+              await escrow(fs, destination, backupDir, rel, escrowDirs)
               archived += root.entries
-              onLine(t('backend.archiveLine', { path: root.rel }))
+              onLine(t('backend.archiveLine', { path: rel }))
             } else {
               await fs.rm(from, { recursive: true, force: true })
             }
-            onLine(t('backend.deleteLine', { path: root.rel }))
+            onLine(t('backend.deleteLine', { path: rel }))
           },
           root.entries
         )
       }
       // Directories in plan order (parents first), then every file and link
       // through a small worker pool — their parents all exist by then.
-      const createDir = (rel: string): boolean => sourceTree.get(rel)!.kind === 'dir'
-      for (const rel of plan.creates.filter(createDir)) {
-        await attempt(rel, async () => {
-          await copyEntry(fs, source, destination, rel, sourceTree.get(rel)!, sourceOverrides)
-          onLine(`  ${rel}/`)
+      const createDir = (key: string): boolean => sourceTree.get(key)!.kind === 'dir'
+      for (const key of plan.creates.filter(createDir)) {
+        const entry = sourceTree.get(key)!
+        await attempt(entry.rel, async () => {
+          await copyEntry(fs, source, destination, entry, sourceOverrides)
+          onLine(`  ${entry.rel}/`)
         })
       }
-      await pool(plan.creates.filter((rel) => !createDir(rel)), COPY_WORKERS, (rel) =>
-        attempt(rel, async () => {
-          await copyEntry(fs, source, destination, rel, sourceTree.get(rel)!, sourceOverrides)
+      await pool(plan.creates.filter((key) => !createDir(key)), COPY_WORKERS, (key) => {
+        const entry = sourceTree.get(key)!
+        return attempt(entry.rel, async () => {
+          await copyEntry(fs, source, destination, entry, sourceOverrides)
           copied++
-          copiedBytes += sizeOf(rel)
-          onLine(`  ${rel}`)
-        }, 1, sizeOf(rel))
-      )
-      await pool(plan.updates, COPY_WORKERS, (rel) =>
-        attempt(rel, async () => {
+          copiedBytes += sizeOf(key)
+          onLine(`  ${entry.rel}`)
+        }, 1, sizeOf(key))
+      })
+      await pool(plan.updates, COPY_WORKERS, (key) => {
+        const entry = sourceTree.get(key)!
+        const destRel = destTree.get(key)?.rel ?? entry.rel
+        return attempt(entry.rel, async () => {
           if (backupDir) {
-            await escrow(fs, destination, backupDir, rel, escrowDirs)
+            await escrow(fs, destination, backupDir, destRel, escrowDirs)
             archived++
-            onLine(t('backend.archiveLine', { path: rel }))
+            onLine(t('backend.archiveLine', { path: destRel }))
           }
-          await copyEntry(fs, source, destination, rel, sourceTree.get(rel)!, sourceOverrides)
+          await copyEntry(fs, source, destination, entry, sourceOverrides, destRel)
           copied++
-          copiedBytes += sizeOf(rel)
-          onLine(`  ${rel}`)
-        }, 1, sizeOf(rel))
-      )
+          copiedBytes += sizeOf(key)
+          onLine(`  ${entry.rel}`)
+        }, 1, sizeOf(key))
+      })
 
       fs.assertActive()
       onProgress({ percent: 100, files: { ...files }, bytes: { ...bytes } })

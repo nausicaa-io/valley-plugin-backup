@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { ARCHIVE_DIR, createMirrorService, mirrorTimestamp, planMapping } from './mirrorService'
 import { isAbsolute, join } from './path'
 import { createStorageSession, type StorageSession } from './storageFs'
-import { MirrorJobs } from './jobLifetime'
+import { MirrorCancelled, MirrorJobs } from './jobLifetime'
 import { BackupClaimed, createHistoryStore } from '../history'
 import type { MirrorResult } from '../types'
 import { formatDuration } from '../format'
@@ -18,7 +18,8 @@ const optionalPath = z.union([absolute, z.literal('')])
 const planSchema = z.object({
   label: z.string().max(256), mappings: z.array(z.object({ source: absolute, destination: absolute, exclude: z.array(z.string().max(1024)).max(256) }).strict()).max(100),
   trashPath: optionalPath, logDirectory: optionalPath, masterLog: optionalPath,
-  retention: z.object({ keepDays: z.number().int().nonnegative(), dailies: z.number().int().nonnegative(), weeklies: z.number().int().nonnegative() }).strict().nullable()
+  retention: z.object({ keepDays: z.number().int().nonnegative(), dailies: z.number().int().nonnegative(), weeklies: z.number().int().nonnegative() }).strict().nullable(),
+  noArchive: z.boolean().optional(), noLogs: z.boolean().optional()
 }).strict()
 const input = z.object({ plan: planSchema }).strict()
 const identitySchema = z.object({ id: z.string().min(1).max(256), startedAt: z.string().datetime(), profileId: z.string().min(1).max(256), profileName: z.string().max(256), trigger: z.enum(['manual', 'scheduled', 'automation']) }).strict()
@@ -66,8 +67,8 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   type OperationApi = PluginBackendOperationContext['api']
   const register = (method: string, operation: (raw: unknown, storage: StorageSession, signal: AbortSignal, ownedApi: OperationApi) => Promise<unknown>) => {
     const execute = async (payload: unknown, ownedApi: OperationApi, cancellation?: AbortSignal): Promise<unknown> => {
-      if (busy && !['check', 'reveal'].includes(method)) throw new Error(t('backend.busy'))
-      const exclusive = !['check', 'reveal'].includes(method)
+      if (busy && !['check', 'reveal', 'missingFolders'].includes(method)) throw new Error(t('backend.busy'))
+      const exclusive = !['check', 'reveal', 'missingFolders'].includes(method)
       if (exclusive) busy = true
       const stopper = method === 'run' ? new AbortController() : undefined
       const forward = (): void => stopper?.abort()
@@ -123,7 +124,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
         if (exclusive) busy = false
       }
     }
-    subscriptions.push(method === 'reveal' ? api.rpc.handle(method, raw => execute(raw, api)) : workflow.operation(method, (raw, context) => {
+    subscriptions.push(method === 'reveal' || method === 'missingFolders' ? api.rpc.handle(method, raw => execute(raw, api)) : workflow.operation(method, (raw, context) => {
       if (!context || typeof context.id !== 'string' || !context.id || context.id.length > 128
         || typeof context.cancellation?.aborted !== 'boolean' || typeof context.cancellation.addEventListener !== 'function' || typeof context.cancellation.removeEventListener !== 'function'
         || context.api?.pluginId !== api.pluginId || typeof context.api?.storage?.open !== 'function' || typeof context.api.storage.close !== 'function' || typeof context.api.rpc?.emit !== 'function') {
@@ -143,7 +144,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     const status = runStatus
     const emit = (progress: unknown): void => { if (!signal.aborted) ownedApi.rpc.emit('progress', progress) }
     try {
-      return await createMirrorService(storage).runMirror(plan, lines.push, (update) => { lines.flush(); if (status && status === runStatus && !signal.aborted) status.progress = { update }; emit({ update }) }, (mapping) => { lines.flush(); emit({ mapping }) })
+      return await createMirrorService(storage, async () => (await ownedApi.native.systemInfo()).volumes).runMirror(plan, lines.push, (update) => { lines.flush(); if (status && status === runStatus && !signal.aborted) status.progress = { update }; emit({ update }) }, (mapping) => { lines.flush(); emit({ mapping }) })
     } finally { lines.flush() }
   })
   register('prune', async (raw, storage) => {
@@ -170,6 +171,21 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   }))
   subscriptions.push(api.rpc.handle('run.status', () => runStatus ? { running: true, profileId: runStatus.profileId, progress: runStatus.progress } : { running: false, profileId: null, progress: null }))
   register('reveal', async (raw, storage) => { const { plan, path } = parse(input.extend({ path: absolute }), raw); await storage.authorizePlan(plan, 'reveal'); await storage.revealStorage(path); return true })
+  // Each folder gets its own read grant, so a drive that is away only marks its own folders.
+  register('missingFolders', async (raw, storage) => {
+    const { plan } = parse(input, raw)
+    const missing: string[] = []
+    for (const path of new Set(plan.mappings.flatMap((mapping) => [mapping.source, mapping.destination]))) {
+      try {
+        await storage.authorizePlan({ label: 'exists', mappings: [{ source: path, destination: path, exclude: [] }], trashPath: '', logDirectory: '', masterLog: '', retention: null }, 'reveal')
+        if (!(await storage.fs.stat(path)).isDirectory()) missing.push(path)
+      } catch (error) {
+        if (error instanceof MirrorCancelled) throw error
+        missing.push(path)
+      }
+    }
+    return missing
+  })
   for (const method of ['list', 'check', 'run', 'prune', 'restorePlan', 'restoreApply'] as const) subscriptions.push(workflow.local(`workflow.profile.${method}`, async (raw, context) => {
     context.cancellation.throwIfAborted()
     const profiles = parseProfiles(context.api.settings.get())

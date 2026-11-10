@@ -154,7 +154,7 @@ describe('bounded backup job ownership', () => {
   it('retains completed archive counts when closing the original grants fails', async () => {
     const owned = backend()
     vi.mocked(owned.storage.stat).mockImplementation(async (location) => ({ name: location.path, kind: location.path === 'gone.txt' ? 'file' : 'directory', size: 1, mtimeMs: 0 }))
-    vi.mocked(owned.storage.list).mockImplementation(async (location) => location.handle === 'grant-2' && !location.path ? [{ name: 'gone.txt', kind: 'file', size: 1, mtimeMs: 0 }] : [])
+    vi.mocked(owned.storage.list).mockImplementation(async (location) => location.path ? [] : [{ name: 'kept.txt', kind: 'file', size: 1, mtimeMs: 0 }, ...(location.handle === 'grant-2' ? [{ name: 'gone.txt', kind: 'file' as const, size: 1, mtimeMs: 0 }] : [])])
     vi.mocked(owned.storage.close).mockRejectedValue(new Error('Grant release failed'))
     const result = await owned.invoke('run', { plan: plan(), identity: runIdentity() })
     expect(result).toMatchObject({ ok: false, archived: 1, mappings: 1, message: 'Grant release failed' })
@@ -165,7 +165,7 @@ describe('bounded backup job ownership', () => {
   it('reports a failed snapshot close after draining remaining grants without replay', async () => {
     const owned = backend()
     vi.mocked(owned.storage.stat).mockImplementation(async (location) => ({ name: location.path, kind: location.path === 'gone.txt' ? 'file' : 'directory', size: 1, mtimeMs: 0 }))
-    vi.mocked(owned.storage.list).mockImplementation(async (location) => location.handle === 'grant-2' && !location.path ? [{ name: 'gone.txt', kind: 'file', size: 1, mtimeMs: 0 }] : [])
+    vi.mocked(owned.storage.list).mockImplementation(async (location) => location.path ? [] : [{ name: 'kept.txt', kind: 'file', size: 1, mtimeMs: 0 }, ...(location.handle === 'grant-2' ? [{ name: 'gone.txt', kind: 'file' as const, size: 1, mtimeMs: 0 }] : [])])
     vi.mocked(owned.storage.close).mockImplementation(async handle => { if (handle === 'snapshot') throw new Error('Snapshot close outcome unknown') })
     const realmPlan = plan()
     realmPlan.mappings[0].source = '/fixtures/active-realm'
@@ -224,7 +224,7 @@ describe('bounded backup job ownership', () => {
     const owned = backend()
     expect(owned.operations.has('workflow.catalog')).toBe(true)
     expect([...owned.operations.keys()].filter(method => method !== 'workflow.catalog')).toEqual(['check', 'run', 'prune', 'restorePlan', 'restoreApply'])
-    expect([...owned.handlers.keys()].filter(method => !method.startsWith('workflow.'))).toEqual(['stop', 'run.status', 'reveal', 'schedule.snapshot'])
+    expect([...owned.handlers.keys()].filter(method => !method.startsWith('workflow.'))).toEqual(['stop', 'run.status', 'reveal', 'missingFolders', 'schedule.snapshot'])
     const run = owned.operations.get('run')!
     const valid = owned.context()
     for (const invalid of [undefined, { ...valid, id: '' }, { ...valid, cancellation: {} }, { ...valid, api: { ...valid.api, pluginId: 'other' } }, { ...valid, api: {} }]) {
@@ -419,22 +419,22 @@ describe('mirror cancellation preserves accepted effects', () => {
     vi.spyOn(fixture, 'prepareStorageSnapshots').mockResolvedValue({ stagingRoot: 'snapshot-root', files: new Map(), excluded: [] } as never)
     const held = deferred<void>(), inFlight = deferred<void>()
     const originalCopy = filesystem.copyFile
-    const names = ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt']
+    const names = ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt', 'g.txt', 'h.txt', 'i.txt', 'j.txt']
     try {
       await filesystem.mkdir(source); await filesystem.mkdir(destination); await filesystem.mkdir(join(trash, '2001-01-01_00-00-00'), { recursive: true })
       for (const name of names) await filesystem.writeFile(join(source, name), name)
       await filesystem.writeFile(join(destination, 'gone.txt'), 'recoverable')
       const copied: string[] = []
       vi.spyOn(filesystem, 'copyFile').mockImplementation(async (...args) => {
-        copied.push(String(args[1])); if (copied.length === 4) inFlight.resolve(); await held.promise; await originalCopy(...args)
+        copied.push(String(args[1]).replace(/\.tmp\.backup$/, '')); if (copied.length === 8) inFlight.resolve(); await held.promise; await originalCopy(...args)
       })
       const service = createMirrorService(fixture)
       const pending = service.runMirror({ ...plan(), trashPath: trash, retention: { keepDays: 0, dailies: 0, weeklies: 0 }, mappings: [{ source, destination, exclude: [] }] }, () => {})
       await inFlight.promise
       controller.abort()
       held.resolve()
-      expect(await pending).toMatchObject({ ok: false, cancelled: true, archived: 1, copied: 4 })
-      expect(copied).toHaveLength(4)
+      expect(await pending).toMatchObject({ ok: false, cancelled: true, archived: 1, copied: 8 })
+      expect(copied).toHaveLength(8)
       for (const target of copied) expect(await filesystem.readFile(target, 'utf8')).toBe(target.split('/').at(-1))
       const untouched = names.filter((name) => !copied.includes(join(destination, name)))
       expect(untouched).toHaveLength(2)
@@ -455,6 +455,7 @@ describe('mirror cancellation preserves accepted effects', () => {
     const cp = filesystem.cp
     try {
       await filesystem.mkdir(source); await filesystem.mkdir(destination)
+      await filesystem.writeFile(join(source, 'kept.txt'), 'kept')
       await filesystem.writeFile(join(destination, 'gone.txt'), 'recoverable')
       vi.spyOn(filesystem, 'rename').mockRejectedValue(Object.assign(new Error('Other device'), { code: 'EXDEV' }))
       vi.spyOn(filesystem, 'cp').mockImplementation(async (...args) => { await cp(...args); controller.abort() })

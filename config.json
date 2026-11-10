@@ -75,6 +75,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "disabled": {
+                      "type": "boolean"
                     }
                   },
                   "additionalProperties": false,
@@ -127,6 +130,12 @@
                   }
                 },
                 "additionalProperties": false
+              },
+              "noArchive": {
+                "type": "boolean"
+              },
+              "noLogs": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false,
@@ -473,6 +482,12 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "noArchive": {
+                      "type": "boolean"
+                    },
+                    "noLogs": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -509,7 +524,8 @@
                           "source-missing",
                           "drive-not-mounted",
                           "overlap",
-                          "dest-error"
+                          "dest-error",
+                          "unsafe-path"
                         ]
                       },
                       "mappingIndex": {
@@ -650,6 +666,12 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "noArchive": {
+                      "type": "boolean"
+                    },
+                    "noLogs": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -759,7 +781,8 @@
                           "source-missing",
                           "drive-not-mounted",
                           "overlap",
-                          "dest-error"
+                          "dest-error",
+                          "unsafe-path"
                         ]
                       },
                       "mappingIndex": {
@@ -903,6 +926,12 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "noArchive": {
+                      "type": "boolean"
+                    },
+                    "noLogs": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -1076,6 +1105,12 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "noArchive": {
+                      "type": "boolean"
+                    },
+                    "noLogs": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -1248,6 +1283,12 @@
                           "additionalProperties": false
                         }
                       ]
+                    },
+                    "noArchive": {
+                      "type": "boolean"
+                    },
+                    "noLogs": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -1483,7 +1524,8 @@
                                   "source-missing",
                                   "drive-not-mounted",
                                   "overlap",
-                                  "dest-error"
+                                  "dest-error",
+                                  "unsafe-path"
                                 ]
                               },
                               "mappingIndex": {
@@ -1566,7 +1608,8 @@
                               "source-missing",
                               "drive-not-mounted",
                               "overlap",
-                              "dest-error"
+                              "dest-error",
+                              "unsafe-path"
                             ]
                           },
                           "mappingIndex": {
@@ -1683,7 +1726,8 @@
                                   "source-missing",
                                   "drive-not-mounted",
                                   "overlap",
-                                  "dest-error"
+                                  "dest-error",
+                                  "unsafe-path"
                                 ]
                               },
                               "mappingIndex": {
@@ -1799,7 +1843,8 @@
                               "source-missing",
                               "drive-not-mounted",
                               "overlap",
-                              "dest-error"
+                              "dest-error",
+                              "unsafe-path"
                             ]
                           },
                           "mappingIndex": {
@@ -2343,6 +2388,7 @@
       "restoreDatasets": true,
       "realm": true
     },
-    "largeData": true
+    "largeData": true,
+    "systemInfo": true
   }
 }

@@ -4,7 +4,6 @@ import { injectStyles } from './styles'
 import { createBackupOperations, registerBackupCommands } from './commands'
 import { createProfileStore, str } from './profiles'
 import { createBackupIcons } from './icons'
-import { createMaintenanceRegistry } from './maintenance'
 import { createBackupPanel, type BackupView } from './Panel'
 import { createBackupSettings } from './Settings'
 import { createBackupPanelState } from './panelState'
@@ -31,10 +30,6 @@ const bookmarkStateSchema = {
         {
           "type": "literal",
           "value": "recent"
-        },
-        {
-          "type": "literal",
-          "value": "archives"
         }
       ]
     }
@@ -56,9 +51,6 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
   const operations = createBackupOperations(api, profileStore)
   let backupView = { profileId: str(api.settings.get().activeProfileId), tab: 'status' as BackupView['tab'] }
   let disposal: Promise<void> | undefined
-  const maintenance = createMaintenanceRegistry({ isActive: () => !disposal && operations.isActive(), activeProfileId: () => backupView.profileId, profile: operations.profile, assertClean: profileStore.assertClean })
-  const revalidateMaintenance = maintenance.revalidate
-  const offMaintenanceState = api.subscribe(revalidateMaintenance)
   const viewListeners = new Set<() => void>()
   const emitView = (): void => { for (const listener of viewListeners) listener() }
   const subscribeView = (listener: () => void): (() => void) => { viewListeners.add(listener); return () => { viewListeners.delete(listener) } }
@@ -66,7 +58,6 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
     const next = { ...backupView, ...patch }
     if (next.profileId === backupView.profileId && next.tab === backupView.tab) return
     backupView = next
-    revalidateMaintenance()
     emitView()
   }
   const offNotification = api.notifications.onAction(event => {
@@ -74,12 +65,12 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
     if (event.targetItemId) updateView({ profileId: event.targetItemId, tab: 'recent' })
     api.workspace.revealOwnPanel('left_sidebar')
   })
-  const offProfileView = profileStore.subscribe(() => { revalidateMaintenance(); emitView() })
+  const offProfileView = profileStore.subscribe(emitView)
 
   const icons = createBackupIcons(React)
   const panelState = createBackupPanelState(api, operations)
   const scheduler = createBackupScheduler(api, { store: profileStore, operations, panel: panelState })
-  const BackupPanel = createBackupPanel(api, operations, maintenance, { getSnapshot: () => backupView, subscribe: subscribeView, update: updateView }, icons, panelState, scheduler)
+  const BackupPanel = createBackupPanel(api, { getSnapshot: () => backupView, subscribe: subscribeView, update: updateView }, icons, panelState, scheduler, profileStore)
   const SettingsView = createBackupSettings(api, profileStore, icons)
 
   api.registerView('backup.panel', BackupPanel)
@@ -95,23 +86,21 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
     restore: (state) => {
       const profileId = typeof state.profileId === 'string' ? state.profileId : ''
       if (profileId && !profileStore.getSnapshot().some((item) => item.id === profileId)) throw new Error('Backup profile is unavailable')
-      const tab = ['status', 'details', 'recent', 'archives'].includes(String(state.tab)) ? state.tab as BackupView['tab'] : 'status'
+      const tab = ['status', 'details', 'recent'].includes(String(state.tab)) ? state.tab as BackupView['tab'] : 'status'
       updateView({ profileId, tab })
     }
   }, { stateSchema: bookmarkStateSchema, itemStateSchema: { ...bookmarkStateSchema, required: [...bookmarkStateSchema.required, "profileId"] }, description: (snapshot, item) => typeof snapshot.view.path === 'string' && snapshot.view.path ? snapshot.view.path : uiText(item ? 'bookmark.item' : 'bookmark.view') })
   return () => {
     if (disposal) return disposal
     const schedulerDrain = scheduler.dispose()
-    const maintenanceDrain = maintenance.dispose()
     const panelDrain = panelState.dispose()
     const drained = offCommand()
     offSurface()
     offNotification()
     offProfileView()
-    offMaintenanceState()
     viewListeners.clear()
     disposeStyles()
-    return disposal = Promise.allSettled([schedulerDrain, drained, maintenanceDrain, panelDrain]).then(() => {
+    return disposal = Promise.allSettled([schedulerDrain, drained, panelDrain]).then(() => {
       profileStore.dispose()
     })
   }

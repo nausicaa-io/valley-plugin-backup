@@ -2,7 +2,7 @@ import { subscribeHistory } from './history'
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
 import { backupApi } from './backupApi'
 import { BackupClaimed, type createBackupOperations, type RunOptions, type RunTrigger } from './commands'
-import { str } from './profiles'
+import { mirrorPlan, str } from './profiles'
 import { uiText } from './localization'
 import { formatDuration } from './format'
 import type { MirrorIssue, MirrorMappingResult, MirrorProgressUpdate } from './types'
@@ -29,6 +29,8 @@ interface PanelState {
   progress: MirrorProgressUpdate | null
   mappingResults: MirrorMappingResult[]
   issues: MirrorIssue[]
+  /** Ticked folders found missing just before the last manual run. */
+  missingFolders: string[]
   history: HistoryRecord[]
   historyError: string | null
   estimateSec: number | null
@@ -37,8 +39,8 @@ interface PanelState {
 
 const number = (value: unknown): number => Number.isFinite(Number(value)) ? Number(value) : 0
 
-export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<ReturnType<typeof createBackupOperations>, 'isActive' | 'check' | 'run' | 'cancel' | 'profile' | 'history'>) {
-  let snapshot: PanelState = { status: 'idle', summary: '', lines: [], progress: null, mappingResults: [], issues: [], history: [], historyError: null, estimateSec: null, startedAt: 0 }
+export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<ReturnType<typeof createBackupOperations>, 'isActive' | 'missingFolders' | 'check' | 'run' | 'cancel' | 'profile' | 'history'>) {
+  let snapshot: PanelState = { status: 'idle', summary: '', lines: [], progress: null, mappingResults: [], issues: [], missingFolders: [], history: [], historyError: null, estimateSec: null, startedAt: 0 }
   let disposed = false
   let disposal: Promise<void> | undefined
   let historyRun: Promise<void> | undefined
@@ -100,8 +102,17 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
     run = (async () => {
       const previous = { status: snapshot.status, summary: snapshot.summary }
       try {
-        publish({ issues: [] })
-        const preflight = await operations.check(profileId || undefined)
+        publish({ issues: [], missingFolders: [] })
+        // A scheduled run keeps waiting for its drive; a manual one runs whatever is there now.
+        const manual = !options.trigger || options.trigger === 'manual'
+        const skipFolders = manual ? await operations.missingFolders(profileId || undefined) : []
+        if (!active()) return
+        publish({ missingFolders: skipFolders })
+        if (skipFolders.length && mirrorPlan(operations.profile(profileId || undefined)).mappings.every((mapping) => skipFolders.includes(mapping.source) || skipFolders.includes(mapping.destination))) {
+          publish({ status: 'failed', summary: uiText('backup.folder.allMissing') })
+          return
+        }
+        const preflight = await operations.check(profileId || undefined, undefined, skipFolders)
         if (!active()) return
         if (!preflight.ok || !preflight.data?.ok) {
           publish({ status: 'failed', summary: '', issues: preflight.data?.issues ?? [{ kind: 'dest-error', message: uiText('auto.e97ecd4af356') }] })
@@ -110,7 +121,7 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
         const selected = operations.profile(profileId || undefined)
         const prior = snapshot.history.find(item => item.ok && (item.profileId === selected.id || item.profileName === selected.name)) ?? snapshot.history.find(item => item.ok)
         publish({ status: 'running', summary: '', lines: [], progress: null, mappingResults: [], estimateSec: prior?.durationSec ?? null, startedAt: Date.now() })
-        const invoked = await operations.run(profileId || undefined, true, undefined, options)
+        const invoked = await operations.run(profileId || undefined, true, undefined, manual ? { ...options, skipFolders } : options)
         if (!active()) return
         const result = invoked.data
         if (result?.cancelled || (!result && stopping)) {
@@ -145,7 +156,7 @@ export function createBackupPanelState(api: ValleyPluginApi, operations: Pick<Re
       if (first) void loadHistory()
       return () => { listeners.delete(listener) }
     },
-    clearIssues: () => publish({ issues: [] }),
+    clearIssues: () => publish({ issues: [], missingFolders: [] }),
     loadHistory,
     start,
     stop,

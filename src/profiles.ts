@@ -2,7 +2,7 @@ import type { ValleyPluginApi } from '@valley/plugin-sdk'
 import type { MirrorPlan } from './types'
 import { parseSchedule, type Schedule } from './schedule'
 
-export type Row = { name?: string; source: string; destination: string; exclude: string[] }
+export type Row = { name?: string; source: string; destination: string; exclude: string[]; disabled?: boolean }
 export type Profile = {
   id: string
   name: string
@@ -12,6 +12,8 @@ export type Profile = {
   masterLog: string
   retention?: 'standard' | 'off'
   schedule?: Schedule
+  noArchive?: boolean
+  noLogs?: boolean
 }
 
 export const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v))
@@ -23,7 +25,7 @@ const rowsFromMappings = (value: unknown): Row[] =>
     ? value.map((m) => {
         const r = (m ?? {}) as Record<string, unknown>
         const exclude = Array.isArray(r.exclude) ? r.exclude.map(String) : []
-        return { ...(typeof r.name === 'string' ? { name: r.name } : {}), source: str(r.source), destination: str(r.destination), exclude }
+        return { ...(typeof r.name === 'string' ? { name: r.name } : {}), source: str(r.source), destination: str(r.destination), exclude, ...(r.disabled === true ? { disabled: true } : {}) }
       })
     : []
 
@@ -40,7 +42,9 @@ export const parseProfiles = (s: Record<string, unknown>): Profile[] => {
       logDirectory: str(p.logDirectory),
       masterLog: str(p.masterLog),
       retention: p.retention === 'off' ? 'off' : 'standard',
-      schedule: parseSchedule(p.schedule)
+      schedule: parseSchedule(p.schedule),
+      ...(p.noArchive === true ? { noArchive: true } : {}),
+      ...(p.noLogs === true ? { noLogs: true } : {})
     }))
 }
 
@@ -49,12 +53,14 @@ export const serializeProfile = (
 ): {
   id: string
   name: string
-  mappings: Array<{ name?: string; source: string; destination: string; exclude: string[] }>
+  mappings: Array<{ name?: string; source: string; destination: string; exclude: string[]; disabled?: boolean }>
   trashPath: string
   logDirectory: string
   masterLog: string
   retention: 'standard' | 'off'
   schedule: Schedule
+  noArchive?: boolean
+  noLogs?: boolean
 } => ({
   id: p.id,
   name: p.name.trim() || 'Untitled',
@@ -62,13 +68,16 @@ export const serializeProfile = (
     ...(r.name?.trim() ? { name: r.name.trim() } : {}),
     source: r.source.trim(),
     destination: r.destination.trim(),
-    exclude: [...new Set(r.exclude.map((value) => value.trim()).filter(Boolean))]
+    exclude: [...new Set(r.exclude.map((value) => value.trim()).filter(Boolean))],
+    ...(r.disabled ? { disabled: true } : {})
   })),
   trashPath: p.trashPath.trim(),
   logDirectory: p.logDirectory.trim(),
   masterLog: p.masterLog.trim(),
   retention: p.retention ?? 'standard',
-  schedule: parseSchedule(p.schedule)
+  schedule: parseSchedule(p.schedule),
+  ...(p.noArchive ? { noArchive: true } : {}),
+  ...(p.noLogs ? { noLogs: true } : {})
 })
 
 export function createProfileStore(api: ValleyPluginApi) {
@@ -109,21 +118,25 @@ export function createProfileStore(api: ValleyPluginApi) {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     setDraft,
     save,
+    settled: (): Promise<void> => pending,
     assertClean: () => { if (dirty) throw Object.assign(new Error('Finish editing backup settings before changing profiles through automation'), { code: 'UNSAVED_DRAFT', outcome: 'not-applied' as const, retryable: false }) },
     dispose: () => { off(); listeners.clear() }
   }
 }
 
-export function mirrorPlan(profile: Profile, forceRetention = false): MirrorPlan {
+/** Runs and prechecks skip unticked folders; retention and restore keep every folder so mapping indices stay stable. */
+export function mirrorPlan(profile: Profile, forceRetention = false, includeDisabled = false): MirrorPlan {
   const saved = serializeProfile(profile)
   return {
     label: saved.name,
     mappings: saved.mappings
-      .filter((mapping) => mapping.source && mapping.destination)
+      .filter((mapping) => mapping.source && mapping.destination && (includeDisabled || !mapping.disabled))
       .map(({ source, destination, exclude }) => ({ source, destination, exclude })),
     trashPath: saved.trashPath,
     logDirectory: saved.logDirectory,
     masterLog: saved.masterLog,
-    retention: !forceRetention && saved.retention === 'off' ? null : { keepDays: 7, dailies: 30, weeklies: 8 }
+    retention: !forceRetention && saved.retention === 'off' ? null : { keepDays: 7, dailies: 30, weeklies: 8 },
+    ...(saved.noArchive ? { noArchive: true } : {}),
+    ...(saved.noLogs ? { noLogs: true } : {})
   }
 }

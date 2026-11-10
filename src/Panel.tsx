@@ -1,17 +1,15 @@
 import type { ValleyPluginApi, UiMenuItem } from '@valley/plugin-sdk'
 import { backupApi } from './backupApi'
-import type { createBackupOperations } from './commands'
-import type { createMaintenanceRegistry, MaintenancePreview } from './maintenance'
 import type { BackupIcons } from './icons'
 import type { MirrorMappingResult } from './types'
 import type { createBackupPanelState, HistoryRecord } from './panelState'
 import type { createBackupScheduler } from './scheduler'
-import { parseProfiles, str } from './profiles'
+import { parseProfiles, str, type createProfileStore, type Profile, type Row } from './profiles'
 import { uiText } from './localization'
 import { RUN_INTERRUPTED, RUN_STOPPED } from './commands'
 import { formatBytes, formatCount, formatDuration, formatUpcoming } from './format'
 
-export type BackupView = { profileId: string; tab: 'status' | 'details' | 'recent' | 'archives' }
+export type BackupView = { profileId: string; tab: 'status' | 'details' | 'recent' }
 type Tab = BackupView['tab']
 
 /**
@@ -43,14 +41,15 @@ function formatRelative(iso: string, locale: string, dateFormat: string): string
   return dateFormat ? formatDatePattern(t, dateFormat) : new Date(t).toLocaleDateString(locale)
 }
 
-export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<typeof createBackupOperations>, previews: ReturnType<typeof createMaintenanceRegistry>, view: { getSnapshot(): BackupView; subscribe(listener: () => void): () => void; update(patch: Partial<BackupView>): void }, icons: BackupIcons, state: ReturnType<typeof createBackupPanelState>, scheduler: Pick<ReturnType<typeof createBackupScheduler>, 'getSnapshot' | 'subscribe'>) {
+export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): BackupView; subscribe(listener: () => void): () => void; update(patch: Partial<BackupView>): void }, icons: BackupIcons, state: ReturnType<typeof createBackupPanelState>, scheduler: Pick<ReturnType<typeof createBackupScheduler>, 'getSnapshot' | 'subscribe'>, profileStore: ReturnType<typeof createProfileStore>) {
   const React = api.React
   const h = React.createElement
-  const { IconCheck, IconX, IconBan, IconLoader, IconChevronDown, IconHardDrive, IconList, IconHistory, IconArchive, IconSliders, IconAlert } = icons
+  const { IconCheck, IconX, IconBan, IconLoader, IconChevronDown, IconHardDrive, IconList, IconHistory, IconFolderOpen, IconSliders, IconAlert } = icons
   const STATUS_ICON: Record<MirrorMappingResult['status'], ReturnType<typeof h>> = { running: IconLoader, done: IconCheck, skipped: IconBan, failed: IconX, stopped: IconBan }
   const BackupPanel = (): ReturnType<typeof h> => {
-    const { status, summary, lines, progress, mappingResults, issues, history, historyError, estimateSec, startedAt } = React.useSyncExternalStore(state.subscribe, state.getSnapshot)
+    const { status, summary, lines, progress, mappingResults, issues, missingFolders, history, historyError, estimateSec, startedAt } = React.useSyncExternalStore(state.subscribe, state.getSnapshot)
     const schedules = React.useSyncExternalStore(scheduler.subscribe, scheduler.getSnapshot)
+    const editableProfiles = React.useSyncExternalStore(profileStore.subscribe, profileStore.getSnapshot)
     const [profiles, setProfiles] = React.useState<Array<{ id: string; name: string }>>([])
     const viewState = React.useSyncExternalStore(view.subscribe, view.getSnapshot)
     const selectedId = viewState.profileId
@@ -67,6 +66,7 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
     const [, bumpTick] = React.useState(0)
     const maxOverallRef = React.useRef(0)
     const logRef = React.useRef<HTMLPreElement | null>(null)
+    const focusedValueRef = React.useRef('')
 
     const nameFor = (id: string): string => profiles.find((p) => p.id === id)?.name ?? 'Backup'
 
@@ -138,107 +138,16 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
       void api.ui.openMenu(items, { anchor, align: 'end' })
     }
 
-    const startRun = (): Promise<void> => state.start(selectedId)
+    // Leaving a path field commits it, so a click on Backup now waits for that save.
+    const startRun = async (): Promise<void> => {
+      await profileStore.settled()
+      await state.start(selectedId)
+    }
     React.useEffect(() => { maxOverallRef.current = 0 }, [startedAt])
 
-    // ---- Archive maintenance: retention cleanup + restore preview/apply ----
-    const [maint, setMaint] = React.useState<
-      | { kind: 'idle' }
-      | { kind: 'busy'; label: string }
-      | { kind: 'prune-counted'; preview: MaintenancePreview; drop: number; kept: number }
-      | { kind: 'restore-plan'; preview: MaintenancePreview; creates: number; updates: number; deletes: number; skipped: string[] }
-      | { kind: 'note'; text: string; skipped?: string[] }
-    >({ kind: 'idle' })
-    const maintenance = React.useRef<ReturnType<typeof previews.createOwner> | null>(null)
-    React.useEffect(() => {
-      const owner = previews.createOwner(() => setMaint({ kind: 'idle' }))
-      maintenance.current = owner
-      return () => { maintenance.current = null; void owner.dispose() }
-    }, [])
-
-    // Use the same plan for the displayed mapping indices and filesystem operations.
-    const selectedMappings = (() => {
-      const s = api.settings.get() as { profiles?: Array<Record<string, unknown>> }
-      const raw = (s.profiles ?? []).find((p) => str(p.id) === selectedId)
-      const rows = Array.isArray(raw?.mappings) ? (raw?.mappings as Array<Record<string, unknown>>) : []
-      return rows
-        .map((m) => ({ name: str(m.name).trim(), source: str(m.source).trim(), destination: str(m.destination).trim() }))
-        .filter((m) => m.source && m.destination)
-    })()
-
-    const runPrune = async (): Promise<void> => {
-      const owner = maintenance.current
-      const preview = owner?.begin(selectedId, true)
-      if (!owner || !preview) {
-        if (owner && operations.isActive()) setMaint({ kind: 'note', text: uiText('auto.2700ef39cb59') })
-        return
-      }
-      setMaint({ kind: 'busy', label: uiText('auto.b2b841a7fc71') })
-      const dry = await owner.run(preview, (signal) => backupApi(api).prune(preview.plan, { dryRun: true }, signal))
-      if (!owner.isCurrent(preview)) return
-      if (!dry?.ok || !dry.data) {
-        setMaint({ kind: 'note', text: uiText('auto.2700ef39cb59') })
-        return
-      }
-      if (dry.data.dropped.length === 0) {
-        setMaint({ kind: 'note', text: uiText('auto.cc54e62c3e08', { p0: dry.data.kept }) })
-        return
-      }
-      if (owner.ready(preview)) setMaint({ kind: 'prune-counted', preview, drop: dry.data.dropped.length, kept: dry.data.kept })
-    }
-    const confirmPrune = async (preview: MaintenancePreview): Promise<void> => {
-      const owner = maintenance.current
-      if (!owner?.confirm(preview)) return
-      setMaint({ kind: 'busy', label: uiText('auto.f7b023b83c72') })
-      const res = await owner.run(preview, (signal) => backupApi(api).prune(preview.plan, { dryRun: false }, signal))
-      if (!owner.isCurrent(preview)) return
-      setMaint({
-        kind: 'note',
-        text:
-          res?.ok && res.data
-            ? uiText('auto.0c2cf66ed63c', { p0: res.data.dropped.length, p1: res.data.kept }) +
-              (res.data.errors.length ? uiText('auto.0943b157227c', { p0: res.data.errors.length }) : '')
-            : uiText('auto.2700ef39cb59')
-      })
-    }
-    const planRestore = async (mi: number): Promise<void> => {
-      const owner = maintenance.current
-      const preview = owner?.begin(selectedId, false, mi)
-      if (!owner || !preview) {
-        if (owner && operations.isActive()) setMaint({ kind: 'note', text: uiText('auto.d7f2768ca570') })
-        return
-      }
-      setMaint({ kind: 'busy', label: uiText('auto.1c36bd34ec77') })
-      const res = await owner.run(preview, (signal) => backupApi(api).restorePlan(preview.plan, mi, signal))
-      if (!owner.isCurrent(preview)) return
-      if (!res?.ok || !res.data?.ok) {
-        setMaint({ kind: 'note', text: uiText('auto.d7f2768ca570') })
-        return
-      }
-      if (owner.ready(preview)) setMaint({
-        kind: 'restore-plan',
-        preview,
-        creates: res.data.creates.length,
-        updates: res.data.updates.length,
-        deletes: res.data.deletes.length,
-        skipped: res.data.skipped ?? []
-      })
-    }
-    const applyRestore = async (preview: MaintenancePreview): Promise<void> => {
-      const owner = maintenance.current
-      if (preview.mappingIndex === undefined || !owner?.confirm(preview)) return
-      setMaint({ kind: 'busy', label: uiText('auto.df34924ef17e') })
-      const res = await owner.run(preview, (signal) => backupApi(api).restoreApply(preview.plan, preview.mappingIndex!, signal))
-      if (!owner.isCurrent(preview)) return
-      setMaint({
-        kind: 'note',
-        text:
-          res?.ok && res.data?.ok
-            ? uiText('auto.dfdc3dc9aa44', { p0: res.data.creates.length + res.data.updates.length })
-            : uiText('auto.c848a612ec9b'),
-        skipped: res?.data?.skipped ?? []
-      })
-    }
+    const selectedProfile = editableProfiles.find((p) => p.id === selectedId)
+    const selectedRows = (selectedProfile?.rows ?? []).filter((row) => row.source.trim() && row.destination.trim())
+    const noFolderSelected = selectedRows.length > 0 && selectedRows.every((row) => row.disabled)
 
     // Overall progress across all mappings (drives the steady progress bar).
     const overall = progress
@@ -271,40 +180,24 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
           : ''
 
     const statusTone = status === 'failed' ? ' is-failed' : status === 'done' ? ' is-done' : ''
-    const statusText =
-      status === 'running'
-        ? progress
-          ? progress.phase === 'scanning'
-            ? uiText('auto.414f279b51ef', { p0: progress.folder })
-            : uiText('auto.f73992337e2d', { p0: progress.folder })
-          : uiText('auto.e5f58095ac29')
-        : status === 'done' || status === 'stopped'
-          ? summary
-          : status === 'failed'
-            ? summary || uiText('auto.09fef5d8d9a3')
-            : uiText('auto.cc1ebdd04e76')
+    const runningText = progress
+      ? progress.phase === 'scanning'
+        ? uiText('auto.414f279b51ef', { p0: progress.folder })
+        : uiText('auto.f73992337e2d', { p0: progress.folder })
+      : uiText('auto.e5f58095ac29')
+    const outcomeText =
+      status === 'done' || status === 'stopped'
+        ? summary
+        : status === 'failed'
+          ? summary || uiText('auto.09fef5d8d9a3')
+          : ''
 
     // ---- Small building blocks (all styling lives in styles.ts) -----------
-    const btn = (
-      label: string,
-      onClick: () => void,
-      opts: { variant?: 'accent' | 'quiet'; disabled?: boolean; wide?: boolean } = {}
-    ): ReturnType<typeof h> =>
-      h(
-        'button',
-        {
-          className:
-            'backup-btn' +
-            (opts.variant ? ` backup-btn--${opts.variant}` : '') +
-            (opts.wide ? ' backup-btn--wide' : ''),
-          disabled: opts.disabled,
-          onClick
-        },
-        label
-      )
+    const btn = (label: string, onClick: () => void): ReturnType<typeof h> =>
+      h('button', { className: 'backup-btn', onClick }, label)
 
-    const sectionHead = (title: string, action?: ReturnType<typeof h> | null): ReturnType<typeof h> =>
-      h('div', { className: 'backup-section' }, h('span', { className: 'backup-section-title' }, title), action ?? null)
+    const sectionHead = (title: string): ReturnType<typeof h> =>
+      h('div', { className: 'backup-section' }, h('span', { className: 'backup-section-title' }, title))
 
     const emptyState = (text: string, action?: ReturnType<typeof h> | null): ReturnType<typeof h> =>
       h('div', { className: 'backup-empty' }, h('span', null, text), action ?? null)
@@ -314,9 +207,8 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
       icon: ReturnType<typeof h> | null,
       tone: '' | ' is-ok' | ' is-bad',
       label: string,
-      sub: string | null,
-      meta: string | null,
-      actions?: ReturnType<typeof h> | null
+      sub: string | string[] | null,
+      meta: string | null
     ): ReturnType<typeof h> =>
       h(
         'div',
@@ -326,13 +218,27 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
           'div',
           { className: 'backup-row-main' },
           h('span', { className: 'backup-row-label', title: label }, label),
-          sub ? h('span', { className: 'backup-row-sub' }, sub) : null
+          ...[sub ?? []].flat().map((line) => h('span', { key: line, className: 'backup-row-sub', title: line }, line))
         ),
-        meta ? h('span', { className: 'backup-row-meta' }, meta) : null,
-        actions ?? null
+        meta ? h('span', { className: 'backup-row-meta' }, meta) : null
       )
 
     const baseName = (p: string): string => p.replace(/\/$/, '').split('/').pop() ?? p
+
+    // Grants only the clicked folder: a backup drive that is away must not block showing a local source.
+    const reveal = async (path: string): Promise<void> => {
+      const result = await backupApi(api).reveal({ label: 'reveal', mappings: [{ source: path, destination: path, exclude: [] }], trashPath: '', logDirectory: '', masterLog: '', retention: null }, path)
+      if (!result.ok) await api.ui.confirm({ title: uiText('manifest.name'), message: uiText('backup.reveal.failed', { path }), actions: [{ label: uiText('auto.77dfd2135f4d'), value: 'close' }] })
+    }
+    const revealButton = (rawPath: string): ReturnType<typeof h> => {
+      const path = rawPath.trim()
+      const label = api.files.revealLabel()
+      return h(
+        'button',
+        { type: 'button', className: 'backup-reveal', disabled: !path, title: label, 'aria-label': path ? `${label}: ${path}` : label, onClick: () => void reveal(path) },
+        IconFolderOpen
+      )
+    }
 
     // ---- Header: title + profile dropdown ---------------------------------
     const profileLabel = profiles.length ? nameFor(selectedId) : uiText('auto.101101ea16da')
@@ -360,10 +266,9 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
 
     // ---- 37px icon tab strip ----------------------------------------------
     const tabs: Array<{ id: Tab; icon: ReturnType<typeof h>; label: string }> = [
-      { id: 'status', icon: status === 'running' ? IconLoader : IconHardDrive, label: uiText('auto.bae7d5be7082') },
+      { id: 'status', icon: IconHardDrive, label: uiText('auto.bae7d5be7082') },
       { id: 'details', icon: IconList, label: uiText('auto.7e3112f57746') },
-      { id: 'recent', icon: IconHistory, label: uiText('auto.a584451ceaf9') },
-      { id: 'archives', icon: IconArchive, label: uiText('auto.a50710e773e1') }
+      { id: 'recent', icon: IconHistory, label: uiText('auto.a584451ceaf9') }
     ]
     const settingsLabel = uiText('auto.432e860f10ff')
     const tabStrip = h(
@@ -435,14 +340,13 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
       ? h(
           'button',
           { className: 'backup-run backup-run--stop', onClick: () => state.stop(), title: uiText('backup.action.stopHint') },
-          IconLoader,
           uiText('backup.action.stop')
         )
       : h(
           'button',
           {
             className: 'backup-run',
-            disabled: !profiles.length,
+            disabled: !profiles.length || noFolderSelected,
             onClick: () => void startRun()
           },
           uiText('auto.5d5dba0742de')
@@ -479,46 +383,149 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
               h('span', null, `${displayOverall}%`),
               h('span', null, etaLabel)
             ),
+            h('div', { className: 'backup-progress-status', title: runningText }, runningText),
             counts ? h('div', { className: 'backup-progress-counts' }, counts) : null
           )
         : null
 
-    const phaseRow = h(
-      'div',
-      { className: `backup-status${statusTone}` },
-      status === 'done' ? IconCheck : status === 'failed' ? IconX : status === 'stopped' ? IconBan : null,
-      h('span', { title: statusText }, statusText)
-    )
+    const phaseRow = outcomeText
+      ? h(
+          'div',
+          { className: `backup-status${statusTone}` },
+          status === 'done' ? IconCheck : status === 'failed' ? IconX : IconBan,
+          h('span', { title: outcomeText }, outcomeText)
+        )
+      : null
 
-    // Friendly per-folder status list for the active run.
+    // What happens to replaced files and to the run's log, for the selected profile.
+    const patchSelected = (patch: Partial<Profile>, persist: boolean): void => {
+      const next = profileStore.getSnapshot().map((p) => (p.id === selectedId ? { ...p, ...patch } : p))
+      if (!persist) {
+        profileStore.setDraft(next)
+        return
+      }
+      void profileStore.save(next).catch(() => api.ui.confirm({ title: uiText('auto.432e860f10ff'), message: uiText('backup.properties.saveError'), actions: [{ label: uiText('auto.77dfd2135f4d'), value: 'close' }] }))
+    }
+    const optionRow = (label: string, enabled: boolean, onToggle: (next: boolean) => void, field: 'trashPath' | 'logDirectory', placeholder: string, note: string | null): ReturnType<typeof h> => {
+      const value = selectedProfile?.[field] ?? ''
+      return h(
+        'div',
+        { key: field, className: 'backup-option' },
+        h(
+          'div',
+          { className: 'backup-path' },
+          h('input', {
+            type: 'checkbox',
+            className: 'backup-check',
+            title: label,
+            'aria-label': label,
+            checked: enabled,
+            onChange: (e: { target: HTMLInputElement }) => onToggle(e.target.checked)
+          }),
+          revealButton(value),
+          h('input', {
+            type: 'text',
+            className: 'backup-path-input',
+            title: value || label,
+            value,
+            placeholder,
+            spellCheck: false,
+            'aria-label': `${label}: ${placeholder}`,
+            disabled: !enabled,
+            onChange: (e: { target: HTMLInputElement }) => patchSelected({ [field]: e.target.value }, false),
+            onFocus: (e: { target: HTMLInputElement }) => { focusedValueRef.current = e.target.value },
+            onBlur: (e: { target: HTMLInputElement }) => { if (e.target.value !== focusedValueRef.current) patchSelected({ [field]: e.target.value }, true) },
+            onKeyDown: (e: { key: string; currentTarget: HTMLInputElement }) => { if (e.key === 'Enter') e.currentTarget.blur() }
+          })
+        ),
+        note ? h('span', { className: 'backup-note', role: 'status' }, note) : null
+      )
+    }
+    const optionRows = selectedProfile && status !== 'running'
+      ? [
+          h(
+            'div',
+            { key: 'options', className: 'backup-options' },
+            optionRow(
+              uiText('backup.options.keepDeleted'),
+              !selectedProfile.noArchive,
+              (next) => patchSelected({ noArchive: !next }, true),
+              'trashPath',
+              uiText('backup.options.keepDeletedPlaceholder'),
+              selectedProfile.noArchive ? uiText('backup.options.deletePermanently') : null
+            ),
+            optionRow(
+              uiText('backup.options.log'),
+              !selectedProfile.noLogs,
+              (next) => patchSelected({ noLogs: !next }, true),
+              'logDirectory',
+              uiText('backup.options.logPlaceholder'),
+              null
+            )
+          )
+        ]
+      : []
+
+    const setFolderEnabled = (target: Row, enabled: boolean): void =>
+      patchSelected({ rows: (selectedProfile?.rows ?? []).map((row) => {
+        if (row !== target) return row
+        const { disabled: _disabled, ...rest } = row
+        return enabled ? rest : { ...rest, disabled: true }
+      }) }, true)
+    const pathRow = (path: string): ReturnType<typeof h> =>
+      h('div', { className: `backup-path${missingFolders.includes(path) ? ' is-missing' : ''}` }, revealButton(path), h('span', { className: 'backup-path-text', title: path }, path))
+
+    // Every source and destination of the profile, with its state from the current run.
     const foldersTitle = uiText('auto.19adc47be34b')
-    const folderRows = mappingResults.length
+    const folderRows = selectedRows.length
       ? [
           sectionHead(foldersTitle),
           h(
             'div',
             { className: 'backup-rows' },
-            ...mappingResults.map((m) => {
-              const live = status === 'running' && progress && progress.mappingIndex === m.index
-              const tone: '' | ' is-ok' | ' is-bad' =
-                m.status === 'failed' || m.status === 'skipped' ? ' is-bad' : m.status === 'done' ? ' is-ok' : ''
-              // The meta column cannot shrink, so only ever short values go there:
-              // a failure reason is a sentence and belongs under the label, or it
-              // squeezes the folder name out of the row entirely.
-              const detailLabel =
-                m.status === 'stopped'
+            ...selectedRows.map((row) => {
+              const source = row.source.trim()
+              const destination = row.destination.trim()
+              const name = row.name?.trim() || baseName(source)
+              const m = row.disabled ? undefined : mappingResults.find((result) => result.source === source && result.destination === destination)
+              const tone = !m ? '' : m.status === 'failed' || m.status === 'skipped' ? ' is-bad' : m.status === 'done' ? ' is-ok' : ''
+              const live = m?.status === 'running' && status === 'running' && progress?.mappingIndex === m.index && progress.phase !== 'scanning'
+              const meta = !m
+                ? ''
+                : m.status === 'stopped'
                   ? uiText('backup.history.stopped')
-                  : m.status === 'done'
-                  ? uiText('auto.d7fd3fcb4bb5', { p0: m.archived ?? 0 })
-                  : m.status === 'running'
-                    ? live && progress && progress.phase !== 'scanning'
-                      ? `${progress.percent}%`
-                      : uiText('auto.a95e286913bf')
-                    : m.archived
+                  : live
+                    ? `${progress.percent}%`
+                    : m.status !== 'running' && m.archived
                       ? uiText('auto.d7fd3fcb4bb5', { p0: m.archived })
                       : ''
-              const reason = m.status === 'failed' || m.status === 'skipped' ? m.message ?? null : null
-              return listRow(String(m.index), STATUS_ICON[m.status], tone, m.folder, reason, detailLabel)
+              // A failure reason is a sentence: it goes under the paths, never into the head row.
+              const missing = !row.disabled && (missingFolders.includes(source) || missingFolders.includes(destination))
+              const missingText = uiText('backup.folder.missing')
+              const reason = missing ? missingText : m?.status === 'failed' || m?.status === 'skipped' ? m.message : undefined
+              return h(
+                'div',
+                { key: `${source}→${destination}`, className: `backup-folder${row.disabled ? ' is-off' : ''}` },
+                h(
+                  'div',
+                  { className: 'backup-folder-head' },
+                  h('input', {
+                    type: 'checkbox',
+                    className: 'backup-check',
+                    checked: !row.disabled && !missing,
+                    disabled: status === 'running' || missing,
+                    title: missing ? missingText : uiText('backup.folder.include', { name }),
+                    'aria-label': uiText('backup.folder.include', { name }),
+                    onChange: (e: { target: HTMLInputElement }) => setFolderEnabled(row, e.target.checked)
+                  }),
+                  h('span', { className: 'backup-row-label', title: name }, name),
+                  meta ? h('span', { className: 'backup-row-meta' }, meta) : null,
+                  m ? h('span', { className: `backup-row-icon${tone}` }, STATUS_ICON[m.status]) : null
+                ),
+                pathRow(source),
+                pathRow(destination),
+                reason ? h('span', { className: 'backup-folder-reason', title: reason }, reason) : null
+              )
             })
           )
         ]
@@ -527,7 +534,7 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
     const setupText = uiText('auto.82f841dac7be')
     const setupActionLabel = uiText('auto.bfc7470c583a')
     const statusTab = profiles.length
-      ? [alertBanner, runButton, scheduleLine, progressBar, phaseRow, ...folderRows]
+      ? [alertBanner, runButton, noFolderSelected ? h('span', { className: 'backup-note', role: 'status' }, uiText('backup.folder.noneSelected')) : null, scheduleLine, progressBar, phaseRow, ...optionRows, ...folderRows]
       : [emptyState(setupText, btn(setupActionLabel, openSettings))]
 
     // ---- Live log tab ------------------------------------------------------
@@ -587,83 +594,8 @@ export function createBackupPanel(api: ValleyPluginApi, operations: ReturnType<t
         : emptyState(noRunsText)
     ]
 
-    // ---- Archives tab: retention cleanup + restore ------------------------
-    const maintBusy = maint.kind === 'busy' || status === 'running'
-    const noFoldersText = uiText('auto.5f88ae056e7b')
-    const archivesTab = [
-      sectionHead(
-        uiText('auto.a50710e773e1'),
-        btn(uiText('auto.197e112d07bd'), () => void runPrune(), { variant: 'quiet', disabled: maintBusy })
-      ),
-      h(
-        'span',
-        { className: 'backup-note' },
-        uiText('auto.62f3dd5a9d1f')
-      ),
-      selectedMappings.length
-        ? h(
-            'div',
-            { className: 'backup-rows' },
-            ...selectedMappings.map((m, mi) =>
-              listRow(
-                `${m.source}→${m.destination}`,
-                null,
-                '',
-                m.name || baseName(m.source),
-                null,
-                null,
-                h(
-                  'div',
-                  { className: 'backup-row-actions' },
-                  btn(uiText('auto.90c0c2eb98de'), () =>
-                    void backupApi(api).reveal(operations.plan(selectedId || undefined), m.destination)
-                  ),
-                  btn(uiText('auto.54a694543dfe'), () => void planRestore(mi), { disabled: maintBusy })
-                )
-              )
-            )
-          )
-        : emptyState(noFoldersText, btn(uiText('auto.112053b66c92'), openSettings)),
-      maint.kind === 'busy' ? h('span', { className: 'backup-note' }, maint.label) : null,
-      maint.kind === 'note' ? h('span', { className: 'backup-note' }, maint.text) : null,
-      (maint.kind === 'note' || maint.kind === 'restore-plan') && maint.skipped?.length ? h('span', { className: 'backup-note', role: 'status' }, uiText('backup.restore.skipped', { paths: maint.skipped.join(', ') })) : null,
-      maint.kind === 'prune-counted'
-        ? h(
-            'div',
-            { className: 'backup-card' },
-            h('span', { className: 'backup-card-text' }, uiText('auto.8911ca48fa04', { p0: maint.drop, p1: maint.kept })),
-            h(
-              'div',
-              { className: 'backup-card-actions' },
-              btn(uiText('auto.e963907dac5c'), () => void confirmPrune(maint.preview), { variant: 'accent', wide: true }),
-              btn(uiText('auto.77dfd2135f4d'), () => maintenance.current?.cancel(maint.preview), { variant: 'quiet' })
-            )
-          )
-        : null,
-      maint.kind === 'restore-plan'
-        ? h(
-            'div',
-            { className: 'backup-card' },
-            h(
-              'span',
-              { className: 'backup-card-text' },
-              uiText('auto.a0498c8d2c44', { p0: maint.creates, p1: maint.updates, p2: maint.deletes })
-            ),
-            h(
-              'div',
-              { className: 'backup-card-actions' },
-              btn(uiText('auto.6f6c3dd91f16'), () => void applyRestore(maint.preview), {
-                variant: 'accent',
-                wide: true
-              }),
-              btn(uiText('auto.77dfd2135f4d'), () => maintenance.current?.cancel(maint.preview), { variant: 'quiet' })
-            )
-          )
-        : null
-    ]
-
     const body =
-      tab === 'details' ? detailsTab : tab === 'recent' ? recentTab : tab === 'archives' ? archivesTab : statusTab
+      tab === 'details' ? detailsTab : tab === 'recent' ? recentTab : statusTab
 
     return h(
       'div',

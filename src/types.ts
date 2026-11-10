@@ -17,6 +17,10 @@ export interface MirrorPlan {
   logDirectory: string
   masterLog: string
   retention: MirrorRetentionPolicy | null
+  /** Remove changed and deleted destination files outright instead of archiving them. */
+  noArchive?: boolean
+  /** Write neither the run log nor the master log line. */
+  noLogs?: boolean
 }
 
 /** A structured progress tick for the current mapping during a mirror run. */
@@ -66,7 +70,7 @@ export interface MirrorProgress {
 
 /** A reason a mirror can't run (or a folder was skipped), surfaced as a clear alert. */
 export interface MirrorIssue {
-  kind: 'no-mappings' | 'source-missing' | 'drive-not-mounted' | 'overlap' | 'dest-error'
+  kind: 'no-mappings' | 'source-missing' | 'drive-not-mounted' | 'overlap' | 'dest-error' | 'unsafe-path'
   /** 1-based mapping index this issue belongs to (absent for plan-level issues). */
   mappingIndex?: number
   folder?: string

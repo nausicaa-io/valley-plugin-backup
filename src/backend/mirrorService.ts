@@ -18,7 +18,7 @@ import {
   PLUGIN_DATA_DIR,
   PLUGIN_DURABLE_DATABASE
 } from '@valley/plugin-sdk/paths'
-import { createMirrorEngine } from './mirror'
+import { STAGED_SUFFIX, createMirrorEngine } from './mirror'
 import { MirrorCancelled } from './jobLifetime'
 import type { StorageSession } from './storageFs'
 import { ARCHIVE_DIR, createArchiveRetention } from './retention'
@@ -36,7 +36,20 @@ const mirrorExcludes = (exclude: readonly string[]): string[] => [
   `${PLUGIN_DATA_DIR}/*/${PLUGIN_CACHE_DATABASE}-wal`,
   `${PLUGIN_DATA_DIR}/*/${PLUGIN_CACHE_DATABASE}-shm`,
   `${PLUGIN_DATA_DIR}/*/cache/`,
-  `${PLUGIN_DATA_DIR}/*/cache/*`
+  `${PLUGIN_DATA_DIR}/*/cache/*`,
+  '._*',
+  '*/._*',
+  `*${STAGED_SUFFIX}`,
+  `*/${ARCHIVE_DIR}/`,
+  // Another realm inside this source has no dataset snapshot, so its durable
+  // databases and their journals are copied as they are; only its caches go.
+  `*/${CACHE_DIR}/`,
+  `*/${CACHE_DIR}/*`,
+  `*/${PLUGIN_DATA_DIR}/*/${PLUGIN_CACHE_DATABASE}`,
+  `*/${PLUGIN_DATA_DIR}/*/${PLUGIN_CACHE_DATABASE}-wal`,
+  `*/${PLUGIN_DATA_DIR}/*/${PLUGIN_CACHE_DATABASE}-shm`,
+  `*/${PLUGIN_DATA_DIR}/*/cache/`,
+  `*/${PLUGIN_DATA_DIR}/*/cache/*`
 ]
 /** Seconds left given how long the transfer has run and how far along it is. */
 export function computeEtaSeconds(elapsedMs: number, percent: number): number | null {
@@ -121,7 +134,29 @@ export function volumeRoot(p: string): string | null {
   return mnt ? mnt[1] : null
 }
 
-export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepareStorageSnapshots' | 'releaseStorageSnapshot' | 'assertActive' | 'restoreExclusions' | 'restoreDatasets'>) {
+const SYSTEM_FOLDERS = new Set(['', '/users', '/home', '/volumes', '/system', '/library', '/applications', '/bin', '/sbin', '/usr', '/var', '/etc', '/private', '/tmp', '/opt', '/dev', '/mnt', '/media', '/run'])
+
+/** Whether a folder is too broad to mirror: a system root, a home folder or a whole drive. */
+export function unsafeBackupPath(path: string): boolean {
+  const folder = normalize(path).replace(/\/$/, '')
+  const lower = folder.toLowerCase()
+  if (SYSTEM_FOLDERS.has(lower) || /^[a-z]:$/.test(lower)) return true
+  if (/^\/(?:users|home)\/[^/]+$/.test(lower) || /^[a-z]:\/(?:users(?:\/[^/]+)?|windows|program files(?: \(x86\))?)$/.test(lower)) return true
+  return volumeRoot(`${folder}/`)?.replace(/[\\/]$/, '').toLowerCase() === lower
+}
+
+/** Free bytes on the volume holding `path`, or null when no listed volume is known to hold it. */
+export function freeBytesOn(path: string, volumes: ReadonlyArray<{ id: string; availableBytes: number }>): number | null {
+  // Only a path off every mount point sits on the system volume. A share under
+  // /Volumes that the list omits is its own disk, so `/` says nothing about it.
+  const mount = volumeRoot(normalize(path)) ?? '/'
+  return volumes.find((volume) => volume.id === mount)?.availableBytes ?? null
+}
+
+export function createMirrorService(
+  storage: Pick<StorageSession, 'fs' | 'prepareStorageSnapshots' | 'releaseStorageSnapshot' | 'assertActive' | 'restoreExclusions' | 'restoreDatasets'>,
+  listVolumes?: () => Promise<ReadonlyArray<{ id: string; availableBytes: number }>>
+) {
   const { fs, prepareStorageSnapshots, releaseStorageSnapshot } = storage
   const mirrorTree = createMirrorEngine(fs)
   const pruneMirrorArchives = createArchiveRetention(storage)
@@ -194,11 +229,19 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
       issues.push({ kind: 'no-mappings', message: t('backend.emptyPlan') })
       return issues
     }
+    if (plan.trashPath && !plan.noArchive && unsafeBackupPath(plan.trashPath)) {
+      issues.push({ kind: 'unsafe-path', message: t('backend.unsafePath', { path: plan.trashPath }) })
+    }
     for (let i = 0; i < plan.mappings.length; i++) {
       storage.assertActive()
       const m = plan.mappings[i]
       const folder = basename(m.source.replace(/\/$/, '')) || m.source
       const base = { mappingIndex: i + 1, folder, source: m.source, destination: m.destination }
+      const unsafe = [m.source, m.destination].find(unsafeBackupPath)
+      if (unsafe) {
+        issues.push({ ...base, kind: 'unsafe-path', message: t('backend.unsafePath', { path: unsafe }) })
+        continue
+      }
       // A destination inside its source is backed up into itself on every run;
       // a source inside its destination is swept away as stale content.
       if (samePath(m.source, m.destination) || nested(m.source, m.destination) || nested(m.destination, m.source)) {
@@ -208,6 +251,12 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
       if (plan.trashPath && (samePath(plan.trashPath, m.source) || samePath(plan.trashPath, m.destination))) {
         issues.push({ ...base, kind: 'overlap', message: t('backend.archiveOverlap', { path: plan.trashPath }) })
         continue
+      }
+      // Two pairs sharing a destination would each delete the other's files.
+      for (const other of plan.mappings.slice(i + 1)) {
+        if (samePath(m.destination, other.destination) || nested(m.destination, other.destination) || nested(other.destination, m.destination)) {
+          issues.push({ ...base, kind: 'overlap', message: t('backend.destinationsCollide', { first: m.destination, second: other.destination }) })
+        }
       }
       if (!(await exists(m.source))) {
         issues.push({ ...base, kind: 'source-missing', message: t('backend.sourceMissing', { path: m.source }) })
@@ -273,7 +322,7 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
    *  plus `error` when the engine could not handle everything. */
   async function runMapping(
     mapping: MirrorMapping,
-    backupDir: string,
+    backupDir: string | undefined,
     sourceOverrides: ReadonlyMap<string, string>,
     onLine: (line: string) => void,
     onTick: (tick: MirrorTick) => void
@@ -284,7 +333,16 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
         destination: mapping.destination,
         exclude: mirrorExcludes(mapping.exclude),
         backupDir,
-        sourceOverrides
+        sourceOverrides,
+        freeBytes: async () => {
+          try {
+            return listVolumes ? freeBytesOn(mapping.destination, await listVolumes()) : null
+          } catch {
+            // System information is macOS-only; elsewhere the run goes ahead unchecked.
+            storage.assertActive()
+            return null
+          }
+        }
       },
       onLine,
       onTick
@@ -392,7 +450,7 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
       }
 
       const ts = mirrorTimestamp(new Date(started))
-      sessionLog = createSessionLog(config.logDirectory, ts)
+      sessionLog = createSessionLog(config.noLogs ? '' : config.logDirectory, ts)
       const snapshots = await prepareStorageSnapshots(config.mappings.map((mapping) => mapping.source))
       stagingRoot = snapshots.stagingRoot
       const mappingCount = config.mappings.length
@@ -426,7 +484,7 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
           continue
         }
 
-        const backupDir = config.trashPath ? join(config.trashPath, ts, folder) : join(mapping.destination, ARCHIVE_DIR, ts)
+        const backupDir = config.noArchive ? undefined : config.trashPath ? join(config.trashPath, ts, folder) : join(mapping.destination, ARCHIVE_DIR, ts)
         emitLine(t('backend.syncing', { folder }))
 
         const base = { folder, mappingIndex: mi + 1, mappingCount }
@@ -468,7 +526,7 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
       }
 
       // Drop an empty timestamp trash dir (nothing was archived this run).
-      if (config.trashPath) {
+      if (config.trashPath && !config.noArchive) {
         const tsDir = join(config.trashPath, ts)
         try {
           if ((await fs.readdir(tsDir)).length === 0) await fs.rmdir(tsDir)
@@ -499,7 +557,7 @@ export function createMirrorService(storage: Pick<StorageSession, 'fs' | 'prepar
       )
       const logs = await Promise.allSettled([
         sessionLog.close(),
-        appendMasterLog(config.masterLog, ts, durationSec, copied, archived, errors)
+        appendMasterLog(config.noLogs ? '' : config.masterLog, ts, durationSec, copied, archived, errors)
       ])
       const failure = logs.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason

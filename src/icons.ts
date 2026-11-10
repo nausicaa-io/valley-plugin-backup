@@ -45,11 +45,12 @@ export function createBackupIcons(React: typeof import('react')) {
     h('path', { d: 'M3 3v5h5' }),
     h('path', { d: 'M12 7v5l4 2' })
   ])
-  const IconArchive = svg([
-    h('rect', { width: 20, height: 5, x: 2, y: 3, rx: 1 }),
-    h('path', { d: 'M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8' }),
-    h('path', { d: 'M10 12h4' })
-  ])
+  // FaRegFolderOpen from react-icons/fa6.
+  const IconFolderOpen = h(
+    'svg',
+    { width: '1em', height: '1em', viewBox: '0 0 576 512', fill: 'currentColor', 'aria-hidden': true, style: { flex: 'none' } },
+    h('path', { d: 'M384 480l48 0c11.4 0 21.9-6 27.6-15.9l112-192c5.8-9.9 5.8-22.1 .1-32.1S555.5 224 544 224l-400 0c-11.4 0-21.9 6-27.6 15.9L48 357.1 48 96c0-8.8 7.2-16 16-16l117.5 0c4.2 0 8.3 1.7 11.3 4.7l26.5 26.5c21 21 49.5 32.8 79.2 32.8L416 144c8.8 0 16 7.2 16 16l0 32 48 0 0-32c0-35.3-28.7-64-64-64L298.5 96c-17 0-33.3-6.7-45.3-18.7L226.7 50.7c-12-12-28.3-18.7-45.3-18.7L64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l23.7 0L384 480z' })
+  )
   const IconSliders = svg([
     h('path', { d: 'M20 7h-9M14 17H5' }),
     h('circle', { cx: 17, cy: 17, r: 3 }),
@@ -60,7 +61,7 @@ export function createBackupIcons(React: typeof import('react')) {
     h('path', { d: 'M12 9v4M12 17h.01' })
   ])
 
-  return { IconCheck, IconX, IconBan, IconLoader, IconChevronDown, IconChevronLeft, IconChevronRight, IconPlus, IconHardDrive, IconList, IconHistory, IconArchive, IconSliders, IconAlert }
+  return { IconCheck, IconX, IconBan, IconLoader, IconChevronDown, IconChevronLeft, IconChevronRight, IconPlus, IconHardDrive, IconList, IconHistory, IconFolderOpen, IconSliders, IconAlert }
 }
 
 export type BackupIcons = ReturnType<typeof createBackupIcons>

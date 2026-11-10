@@ -7,7 +7,9 @@ import { join, sep } from 'path'
 import {
   ARCHIVE_DIR,
   createMirrorService,
+  freeBytesOn,
   planMapping,
+  unsafeBackupPath,
   volumeRoot,
   mirrorTimestamp,
   computeEtaSeconds,
@@ -339,6 +341,127 @@ describe('preflightMirror', () => {
       profile([{ source: srcDir, destination: join(dstDir, 'sub', 'not-yet-created'), exclude: [] }])
     )
     expect(issues).toEqual([])
+  })
+})
+
+describe('mirror safety', () => {
+  const tree = async () => {
+    const root = await fs.mkdtemp(join(tmpdir(), 'mirror-safety-'))
+    const source = join(root, 'source')
+    const destination = join(root, 'destination')
+    await fs.mkdir(source, { recursive: true })
+    await fs.mkdir(destination, { recursive: true })
+    const plan = (extra: Partial<MirrorPlan> = {}): MirrorPlan => ({ label: 'Safety', retention: null, trashPath: '', logDirectory: '', masterLog: '', mappings: [{ source, destination, exclude: [] }], ...extra })
+    return { root, source, destination, plan, close: () => fs.rm(root, { recursive: true, force: true }) }
+  }
+
+  it('removes replaced files outright and writes no logs when both options are off', async () => {
+    const { root, source, destination, plan, close } = await tree()
+    try {
+      const trashPath = join(root, 'deleted-files')
+      const logDirectory = join(root, 'logs')
+      const masterLog = join(root, 'master.log')
+      await fs.writeFile(join(source, 'changed.md'), 'new and longer contents')
+      await fs.writeFile(join(destination, 'changed.md'), 'old')
+      await fs.writeFile(join(destination, 'gone.md'), 'old')
+      const result = await runMirror(plan({ trashPath, logDirectory, masterLog, noArchive: true, noLogs: true }), () => {})
+      expect(result).toMatchObject({ ok: true, archived: 0, copied: 1 })
+      expect(await fs.readFile(join(destination, 'changed.md'), 'utf-8')).toBe('new and longer contents')
+      await expect(fs.access(join(destination, 'gone.md'))).rejects.toThrow()
+      await expect(fs.access(join(destination, ARCHIVE_DIR))).rejects.toThrow()
+      for (const path of [trashPath, logDirectory, masterLog]) await expect(fs.access(path)).rejects.toThrow()
+    } finally { await close() }
+  })
+
+  it('changes nothing when a folder cannot be read', async () => {
+    const { source, destination, plan, close } = await tree()
+    try {
+      await fs.mkdir(join(source, 'locked'))
+      await fs.writeFile(join(source, 'kept.md'), 'kept')
+      await fs.mkdir(join(destination, 'locked'))
+      await fs.writeFile(join(destination, 'locked', 'precious.md'), 'precious')
+      const fixture = mirrorFixture()
+      const readdir = fixture.fs.readdir
+      const service = createMirrorService({ ...fixture, fs: new Proxy(fixture.fs, { get: (target, key) => key === 'readdir' ? (path: string, options: never) => path === join(source, 'locked') ? Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })) : readdir(path, options) : Reflect.get(target, key) }) })
+      const result = await service.runMirror(plan(), () => {})
+      expect(result.ok).toBe(false)
+      expect(await fs.readFile(join(destination, 'locked', 'precious.md'), 'utf-8')).toBe('precious')
+      await expect(fs.access(join(destination, 'kept.md'))).rejects.toThrow()
+    } finally { await close() }
+  })
+
+  it('refuses an emptied source instead of wiping its backup', async () => {
+    const { destination, plan, close } = await tree()
+    try {
+      await fs.writeFile(join(destination, 'precious.md'), 'precious')
+      const result = await runMirror(plan(), () => {})
+      expect(result.ok).toBe(false)
+      expect(await fs.readFile(join(destination, 'precious.md'), 'utf-8')).toBe('precious')
+    } finally { await close() }
+  })
+
+  it('treats one name in two Unicode spellings as the same file', async () => {
+    const { source, destination, plan, close } = await tree()
+    try {
+      const stamp = new Date('2026-01-01T00:00:00Z')
+      await fs.writeFile(join(source, 'Zu\u0308rich.md'), 'same')
+      await fs.writeFile(join(destination, 'Z\u00fcrich.md'), 'same')
+      await fs.utimes(join(source, 'Zu\u0308rich.md'), stamp, stamp)
+      await fs.utimes(join(destination, 'Z\u00fcrich.md'), stamp, stamp)
+      expect(await runMirror(plan(), () => {})).toMatchObject({ ok: true, copied: 0, archived: 0 })
+    } finally { await close() }
+  })
+
+  it('skips AppleDouble, unfinished and nested-realm cache files and leaves no staged file', async () => {
+    const { source, destination, plan, close } = await tree()
+    try {
+      await fs.writeFile(join(source, 'kept.md'), 'kept')
+      await fs.writeFile(join(source, '._kept.md'), 'resource fork')
+      await fs.writeFile(join(source, 'half.md.tmp.backup'), 'unfinished')
+      await fs.mkdir(join(source, 'other', '.valley', 'cache'), { recursive: true })
+      await fs.writeFile(join(source, 'other', '.valley', 'cache', 'index.bin'), 'cache')
+      await fs.writeFile(join(destination, '._stale'), 'stays')
+      expect(await runMirror(plan(), () => {})).toMatchObject({ ok: true, copied: 1, archived: 0 })
+      expect((await fs.readdir(destination)).sort()).toEqual(['._stale', 'kept.md', 'other'].sort())
+      await expect(fs.access(join(destination, 'other', '.valley', 'cache'))).rejects.toThrow()
+    } finally { await close() }
+  })
+
+  it('refuses a copy that would not leave the reserve free, and only then', async () => {
+    const { source, destination, plan, close } = await tree()
+    try {
+      await fs.writeFile(join(source, 'new.md'), 'new')
+      const reserve = 256 * 1024 * 1024
+      const full = await createMirrorService(mirrorFixture(), async () => [{ id: '/', availableBytes: reserve }]).runMirror(plan(), () => {})
+      expect(full.ok).toBe(false)
+      await expect(fs.access(join(destination, 'new.md'))).rejects.toThrow()
+      expect(await createMirrorService(mirrorFixture(), async () => [{ id: '/', availableBytes: reserve + 3 }]).runMirror(plan(), () => {})).toMatchObject({ ok: true, copied: 1 })
+      await fs.rm(join(source, 'new.md'))
+      await fs.writeFile(join(source, 'kept.md'), 'new')
+      await fs.utimes(join(source, 'kept.md'), new Date(0), new Date(0))
+      await fs.writeFile(join(destination, 'kept.md'), 'new')
+      await fs.utimes(join(destination, 'kept.md'), new Date(0), new Date(0))
+      expect(await createMirrorService(mirrorFixture(), async () => [{ id: '/', availableBytes: 0 }]).runMirror(plan(), () => {})).toMatchObject({ ok: true, copied: 0 })
+      await fs.writeFile(join(source, 'unchecked.md'), 'new')
+      expect(await createMirrorService(mirrorFixture(), async () => { throw new Error('unavailable') }).runMirror(plan(), () => {})).toMatchObject({ ok: true, copied: 1 })
+    } finally { await close() }
+  })
+
+  it('reads free space only from the volume that holds the destination', () => {
+    const volumes = [{ id: '/', availableBytes: 10 }, { id: '/Volumes/T7', availableBytes: 20 }]
+    expect(freeBytesOn('/Users/someone/backup', volumes)).toBe(10)
+    expect(freeBytesOn('/Volumes/T7/backup', volumes)).toBe(20)
+    expect(freeBytesOn('/Volumes/Share/backup', volumes)).toBeNull()
+  })
+
+  it('refuses system folders, home folders, whole drives and colliding destinations', async () => {
+    const { source, destination, plan, close } = await tree()
+    try {
+      for (const path of ['/', '/Users', '/Users/someone', '/home/someone', '/Volumes/T7', '/mnt/usb', 'E:\\', 'C:\\Users\\someone']) expect(unsafeBackupPath(path), path).toBe(true)
+      for (const path of ['/Volumes/T7/backup', '/Users/someone/Documents', 'E:\\backup']) expect(unsafeBackupPath(path), path).toBe(false)
+      expect((await preflightMirror(plan({ mappings: [{ source, destination: '/Volumes/T7', exclude: [] }] }))).map((issue) => issue.kind)).toEqual(['unsafe-path'])
+      expect((await preflightMirror(plan({ mappings: [{ source, destination: join(destination, 'a'), exclude: [] }, { source, destination: join(destination, 'a', 'b'), exclude: [] }] }))).map((issue) => issue.kind)).toEqual(['overlap'])
+    } finally { await close() }
   })
 })
 

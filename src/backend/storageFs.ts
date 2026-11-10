@@ -17,13 +17,13 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
   let cleanupFailure: unknown
   const pending = new Set<Promise<unknown>>()
   const assertActive = (): void => { if (disposed || signal?.aborted) throw new MirrorCancelled() }
-  const accepted = <T>(operation: () => Promise<T>, cleanup = false): Promise<T> => {
-    if (!cleanup) assertActive()
+  const accepted = <T>(operation: () => Promise<T>, phase: 'active' | 'finish' | 'cleanup' = 'active'): Promise<T> => {
+    if (phase === 'active') assertActive()
     const task = (async () => operation())()
     pending.add(task)
     void task.then(() => pending.delete(task), error => {
       pending.delete(task)
-      if (cleanup && !cleanupFailed) { cleanupFailed = true; cleanupFailure = error }
+      if (phase === 'cleanup' && !cleanupFailed) { cleanupFailed = true; cleanupFailure = error }
     })
     return task
   }
@@ -31,8 +31,8 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
   const snapshots = new Map<string, string>()
   let restoreRealm: PluginStorageGrant | undefined
   const missing = (path: string): Error => Object.assign(new Error(t('backend.storageMissing', { path })), { code: 'ENOENT' })
-  const location = (path: string, write = false): PluginStorageLocation => {
-    assertActive()
+  const location = (path: string, write = false, finishing = false): PluginStorageLocation => {
+    if (!finishing) assertActive()
     const normalized = normalize(path)
     const grant = grants.filter((entry) => (!write || entry.mode === 'write') && (normalized === normalize(entry.path) || (entry.kind === 'directory' && normalized.startsWith(normalize(entry.path) + '/')))).sort((a, b) => b.path.length - a.path.length)[0]
     if (!grant) throw new Error(t(write ? 'backend.writeGrant' : 'backend.readGrant', { path }))
@@ -52,8 +52,11 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
       requested.push({ path: mapping.destination, kind: 'directory', mode: ['run', 'prune', 'restoreApply'].includes(operation) ? 'write' : 'read' })
     }
     const write = ['run', 'prune', 'restoreApply'].includes(operation)
-    for (const path of [plan.trashPath, plan.logDirectory]) if (path) requested.push({ path, kind: 'directory', mode: write ? 'write' : 'read' })
-    if (plan.masterLog) requested.push({ path: plan.masterLog, kind: 'file', mode: write ? 'write' : 'read' })
+    // A switched-off archive or log must not block a run because its drive is away.
+    // Retention and restores still reach an existing archive folder.
+    const archiveUnused = plan.noArchive && !plan.retention && (operation === 'run' || operation === 'check')
+    for (const path of [archiveUnused ? '' : plan.trashPath, plan.noLogs ? '' : plan.logDirectory]) if (path) requested.push({ path, kind: 'directory', mode: write ? 'write' : 'read' })
+    if (plan.masterLog && !plan.noLogs) requested.push({ path: plan.masterLog, kind: 'file', mode: write ? 'write' : 'read' })
     for (const input of requested) {
       assertActive()
       const path = normalize(input.path)
@@ -81,6 +84,8 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     async readlink(path: string): Promise<string> { return accepted(() => storage.readLink(location(path))) },
     async symlink(target: string, path: string, _type?: string): Promise<void> { await accepted(() => storage.link(location(path, true), target)) },
     async rename(source: string, destination: string): Promise<void> { await accepted(() => storage.move(location(source, true), location(destination, true))) },
+    /** Renames a finished copy into place. A stop must not strand bytes the host already wrote under their staged name. */
+    async commit(staged: string, target: string): Promise<void> { await accepted(() => storage.move(location(staged, true, true), location(target, true, true)), 'finish') },
     async cp(source: string, destination: string, _options?: { recursive?: boolean; force?: boolean }): Promise<void> { await accepted(() => storage.copy(location(source), location(destination, true))) },
     async copyFile(source: string, destination: string): Promise<void> { await accepted(() => storage.copy(location(source), location(destination, true))) },
     async utimes(path: string, _accessed: Date, modified: Date): Promise<void> { await accepted(() => storage.setTimes(location(path, true), modified.getTime())) },
@@ -121,7 +126,7 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     snapshots.delete(root)
     const index = grants.findIndex((grant) => grant.handle === handle)
     if (index >= 0) grants.splice(index, 1)
-    await accepted(() => storage.close(handle), true)
+    await accepted(() => storage.close(handle), 'cleanup')
   }
   async function revealStorage(path: string): Promise<void> { await accepted(() => storage.reveal(location(path))) }
   const restoringRealm = (mapping: MirrorMapping): boolean => Boolean(restoreRealm && normalize(mapping.source) === normalize(restoreRealm.path))
@@ -135,7 +140,7 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     disposed = true
     return disposal = (async () => {
       while (pending.size) await Promise.allSettled([...pending])
-      const results = await Promise.allSettled(grants.splice(0).map((grant) => accepted(() => storage.close(grant.handle), true)))
+      const results = await Promise.allSettled(grants.splice(0).map((grant) => accepted(() => storage.close(grant.handle), 'cleanup')))
       snapshots.clear()
       if (cleanupFailed) throw cleanupFailure
       const failure = results.find((result) => result.status === 'rejected')
