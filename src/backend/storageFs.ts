@@ -5,6 +5,35 @@ import { CONFIG_DIR } from '@valley/plugin-sdk/paths'
 import { dirname, normalize } from './path'
 import { MirrorCancelled } from './jobLifetime'
 
+export interface NativeMirrorOutcome {
+  ok: boolean
+  cancelled: boolean
+  refusal?: { code: 'sourceNotFolder' | 'sourceUnreadable' | 'emptySource' | 'notEnoughSpace'; error?: string; count?: number; needed?: number; free?: number }
+  archived: number
+  copied: number
+  bytes: number
+  failed: number
+  errors: string[]
+}
+export interface NativeMirrorPoll {
+  scanning: boolean
+  percent: number
+  filesDone: number
+  filesTotal: number
+  bytesDone: number
+  bytesTotal: number
+  lines: string[]
+  outcome?: NativeMirrorOutcome
+}
+export interface NativeMirrorInput { source: string; destination: string; backupDir?: string; exclude: string[]; overrides: Array<[string, string]>; freeBytes?: number }
+export interface NativeMirror { poll(): Promise<NativeMirrorPoll>; cancel(): Promise<void> }
+/** Present on hosts newer than the vendored SDK; every use checks for it. */
+interface NativeMirrorStorage {
+  mirrorStart?(input: unknown): Promise<{ id: string }>
+  mirrorPoll?(id: string): Promise<NativeMirrorPoll>
+  mirrorCancel?(id: string): Promise<void>
+}
+
 const statObject = (entry: PluginStorageEntry) => ({ ...entry, isDirectory: () => entry.kind === 'directory', isFile: () => entry.kind === 'file', isSymbolicLink: () => entry.kind === 'symlink' })
 export type StorageDirent = ReturnType<typeof statObject>
 export type StorageFs = ReturnType<typeof createStorageSession>['fs']
@@ -67,6 +96,7 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
 
   const storageFs = {
     assertActive,
+    startNativeMirror,
     async access(path: string): Promise<void> {
       try { if (!await accepted(() => storage.stat(location(path)))) throw missing(path) }
       catch (error) { if (error instanceof MirrorCancelled) throw error; if (!grants.some((grant) => grant.ancestors?.map(normalize).includes(normalize(path)))) throw error }
@@ -127,6 +157,25 @@ export function createStorageSession(storage: PluginStorageApi, signal?: AbortSi
     const index = grants.findIndex((grant) => grant.handle === handle)
     if (index >= 0) grants.splice(index, 1)
     await accepted(() => storage.close(handle), 'cleanup')
+  }
+  /** The host's native mirror for external destinations, or null where this host has none. */
+  async function startNativeMirror(input: NativeMirrorInput): Promise<NativeMirror | null> {
+    const native = storage as PluginStorageApi & NativeMirrorStorage
+    if (typeof native.mirrorStart !== 'function') return null
+    try {
+      const { id } = await accepted(() => native.mirrorStart!({
+        source: location(input.source), destination: location(input.destination, true),
+        ...(input.backupDir ? { backupDir: location(input.backupDir, true) } : {}),
+        exclude: input.exclude,
+        overrides: input.overrides.map(([rel, path]) => ({ rel, location: location(path) })),
+        ...(input.freeBytes === undefined ? {} : { freeBytes: input.freeBytes })
+      }))
+      return { poll: () => accepted(() => native.mirrorPoll!(id), 'finish'), cancel: () => accepted(() => native.mirrorCancel!(id), 'finish') }
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code
+      if (code === 'NATIVE_UNAVAILABLE' || code === 'NATIVE_MIRROR_UNSUPPORTED') return null
+      throw error
+    }
   }
   async function revealStorage(path: string): Promise<void> { await accepted(() => storage.reveal(location(path))) }
   const restoringRealm = (mapping: MirrorMapping): boolean => Boolean(restoreRealm && normalize(mapping.source) === normalize(restoreRealm.path))

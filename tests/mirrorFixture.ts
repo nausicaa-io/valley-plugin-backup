@@ -16,6 +16,7 @@ export function mirrorFixture(assertActive = () => {}) {
   const fs = new Proxy(filesystem, {
     get(target, key) {
       if (key === 'assertActive') return assertActive
+      if (key === 'startNativeMirror') return async () => null
       if (key === 'commit') return (staged: string, path: string) => target.rename(staged, path)
       if (key === 'readdir') {
         return (path: string, options?: { withFileTypes?: boolean }) => {

@@ -52,6 +52,8 @@ export interface MirrorOptions {
   sourceOverrides?: ReadonlyMap<string, string>
   /** Free bytes on the destination's volume, or null when that is unknown. */
   freeBytes?: () => Promise<number | null>
+  /** Use the host's native mirror when it has one; only for an external destination. */
+  native?: boolean
 }
 
 export interface MirrorTick {
@@ -299,6 +301,58 @@ async function walk<T>(start: T[], width: number, visit: (item: T, push: (item: 
   if (failure) throw failure.reason
 }
 
+/** The host's native mirror, with this engine's refusals, log lines and progress. Null where the host has none. */
+async function nativeMirror(fs: StorageFs, opts: MirrorOptions, onLine: (line: string) => void, onProgress: (progress: MirrorTick) => void): Promise<MirrorOutcome | null> {
+  const free = opts.freeBytes ? await opts.freeBytes() : null
+  fs.assertActive()
+  const job = await fs.startNativeMirror({
+    source: opts.source, destination: opts.destination,
+    ...(opts.backupDir ? { backupDir: opts.backupDir } : {}),
+    exclude: opts.exclude.map((pattern) => pattern.normalize('NFC')),
+    overrides: [...(opts.sourceOverrides ?? [])],
+    ...(free === null ? {} : { freeBytes: free })
+  })
+  if (!job) return null
+  const empty = { archived: 0, copied: 0, bytes: 0, creates: [], updates: [], deletes: [] }
+  let cancelling = false
+  for (;;) {
+    const poll = await job.poll()
+    for (const line of poll.lines) {
+      const separator = line.indexOf('\t')
+      const kind = line.slice(0, separator)
+      const value = line.slice(separator + 1)
+      if (kind === 'archive') onLine(t('backend.archiveLine', { path: value }))
+      else if (kind === 'delete') onLine(t('backend.deleteLine', { path: value }))
+      else if (kind === 'failed') onLine(`  [!] ${value}`)
+      else onLine(`  ${value}`)
+    }
+    if (!poll.scanning) onProgress({ percent: poll.percent, files: { done: poll.filesDone, total: poll.filesTotal }, bytes: { done: poll.bytesDone, total: poll.bytesTotal } })
+    const outcome = poll.outcome
+    if (outcome) {
+      const refusal = outcome.refusal
+      if (refusal) {
+        const message = refusal.code === 'sourceNotFolder' ? t('backend.sourceNotFolder', { path: opts.source })
+          : refusal.code === 'emptySource' ? t('backend.emptySource', { path: opts.source, count: refusal.count ?? 0 })
+          : refusal.code === 'notEnoughSpace' ? t('backend.notEnoughSpace', { needed: formatBytes(refusal.needed ?? 0, 'en'), free: formatBytes(refusal.free ?? 0, 'en') })
+          : t('backend.sourceUnavailable', { path: opts.source })
+        return { ok: false, ...empty, errors: [message], message }
+      }
+      const counts = { archived: outcome.archived, copied: outcome.copied, bytes: outcome.bytes, creates: [], updates: [], deletes: [] }
+      if (outcome.cancelled) return { ok: false, cancelled: true, ...counts, errors: outcome.errors, message: new MirrorCancelled().message }
+      if (outcome.failed) return { ok: false, ...counts, errors: outcome.errors, message: t('backend.itemsFailed', { count: outcome.failed, error: outcome.errors[0] }) }
+      return { ok: true, ...counts, errors: [] }
+    }
+    try {
+      if (!cancelling) fs.assertActive()
+    } catch (error) {
+      if (!(error instanceof MirrorCancelled)) throw error
+      cancelling = true
+      await job.cancel()
+    }
+    await new Promise<void>((resume) => setTimeout(resume, 100))
+  }
+}
+
 /**
  * Mirror `source` into `destination`. Emits one log line per action through
  * `onLine` and throttled progress — percent weighted by bytes, plus entry and
@@ -316,6 +370,10 @@ export function createMirrorEngine(fs: StorageFs) {
     onLine: (line: string) => void = () => {},
     onProgress: (progress: MirrorTick) => void = () => {}
   ): Promise<MirrorOutcome> {
+    if (opts.native && !opts.dryRun) {
+      const outcome = await nativeMirror(fs, opts, onLine, onProgress)
+      if (outcome) return outcome
+    }
     const { source, destination, backupDir, dryRun = false } = opts
     const exclude = opts.exclude.map((pattern) => pattern.normalize('NFC'))
     const sourceOverrides = opts.sourceOverrides ? new Map(opts.sourceOverrides) : undefined

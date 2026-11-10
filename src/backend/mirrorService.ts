@@ -334,6 +334,7 @@ export function createMirrorService(
         exclude: mirrorExcludes(mapping.exclude),
         backupDir,
         sourceOverrides,
+        native: true,
         freeBytes: async () => {
           try {
             return listVolumes ? freeBytesOn(mapping.destination, await listVolumes()) : null

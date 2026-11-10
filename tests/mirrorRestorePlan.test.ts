@@ -5,6 +5,7 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createMirrorEngine } from '../src/backend/mirror'
+import { MirrorCancelled } from '../src/backend/jobLifetime'
 import { createMirrorService } from '../src/backend/mirrorService'
 const fixture = mirrorFixture()
 const mirrorTree = createMirrorEngine(fixture.fs)
@@ -409,6 +410,45 @@ describe('large trees', () => {
     const m = memoryFs({ '/src': (() => { const s = dir(); s.children.set('other', file()); return s })(), '/dst': dest })
     expect(await createMirrorEngine(m.fs)({ ...paths, exclude: ['*.keep'] })).toMatchObject({ ok: true })
     expect(m.removed.sort()).toEqual(['/dst/stale/junk', '/dst/stale/sub'])
+  })
+})
+
+describe('native mirror', () => {
+  const paths = { source: '/src', destination: '/dst', exclude: [] as string[], native: true }
+  const result = { ok: true, cancelled: false, archived: 1, copied: 2, bytes: 3, failed: 0, errors: [] as string[] }
+  const idle = { scanning: false, percent: 100, filesDone: 2, filesTotal: 2, bytesDone: 3, bytesTotal: 3, lines: [] as string[] }
+  const engine = (polls: unknown[], extra: Record<string, unknown> = {}) => {
+    const cancel = vi.fn(async () => {})
+    const start = vi.fn(async () => ({ poll: async () => polls.shift(), cancel }))
+    const fs = { assertActive: () => {}, startNativeMirror: start, ...extra }
+    return { run: createMirrorEngine(fs as unknown as Parameters<typeof createMirrorEngine>[0]), start, cancel }
+  }
+
+  it('reports the native counts and log lines', async () => {
+    const lines: string[] = []
+    const { run, start } = engine([{ ...idle, lines: ['copy\ta.md', 'dir\tb/', 'failed\tc: no'] }, { ...idle, outcome: result }])
+    expect(await run({ ...paths, backupDir: '/arch', freeBytes: async () => 9 }, (line) => lines.push(line))).toMatchObject({ ok: true, archived: 1, copied: 2, bytes: 3 })
+    expect(lines).toEqual(['  a.md', '  b/', '  [!] c: no'])
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ backupDir: '/arch', freeBytes: 9 }))
+  })
+
+  it('turns a native refusal into the same failed outcome', async () => {
+    const { run } = engine([{ ...idle, outcome: { ...result, ok: false, refusal: { code: 'emptySource', count: 4 } } }])
+    expect(await run(paths)).toMatchObject({ ok: false, copied: 0 })
+  })
+
+  it('counts every failed item, not only the retained messages', async () => {
+    const { run } = engine([{ ...idle, outcome: { ...result, ok: false, failed: 7, errors: ['x: no'] } }])
+    expect((await run(paths)).message).toContain('7')
+  })
+
+  it('cancels the native job when the backup is stopped and waits for its outcome', async () => {
+    let active = true
+    const { run, cancel } = engine([{ ...idle }, { ...idle, outcome: { ...result, ok: false, cancelled: true } }], { assertActive: () => { if (!active) throw new MirrorCancelled() } })
+    const pending = run(paths)
+    active = false
+    expect(await pending).toMatchObject({ ok: false, cancelled: true })
+    expect(cancel).toHaveBeenCalledOnce()
   })
 })
 
