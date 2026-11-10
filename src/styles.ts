@@ -207,7 +207,7 @@ export const CSS = `
   border: none;
   border-radius: var(--radius);
   background: var(--accent-color);
-  color: #fff;
+  color: var(--accent-button-text, #fff);
   font-family: inherit;
   font-size: var(--small-font-size);
   font-weight: var(--font-semi-bold);
@@ -217,12 +217,6 @@ export const CSS = `
 .backup-run:hover:not(:disabled) { filter: brightness(1.08); }
 .backup-run:disabled { opacity: 0.6; cursor: default; }
 .backup-run svg { width: 15px; height: 15px; }
-.backup-run--stop {
-  background: var(--container-color);
-  color: var(--text-color);
-  box-shadow: inset 0 0 0 1px var(--border-medium);
-}
-.backup-run--stop:hover { filter: none; background: var(--container-color-light); }
 .backup-run:focus:not(:focus-visible) { outline: none; }
 
 /* ---- Schedule line ------------------------------------------------------ */
@@ -314,16 +308,35 @@ export const CSS = `
 .backup-status svg { width: 14px; height: 14px; flex: none; }
 
 /* ---- Checkbox + folder button + path rows ------------------------------ */
-.backup-options { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.backup-options { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 .backup-option { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.backup-option.is-off .backup-path-text { opacity: 0.6; }
 .backup-check {
+  position: relative;
   flex: none;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   margin: 0;
-  accent-color: var(--accent-color);
+  box-sizing: border-box;
+  appearance: none;
+  border: 1.5px solid var(--border-medium);
+  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
+.backup-check:hover:not(:disabled) { border-color: var(--accent-color); }
+.backup-check:checked { border-color: var(--accent-color); background: var(--accent-color); }
+.backup-check:checked::after {
+  content: '';
+  position: absolute;
+  inset: 2.5px 2px;
+  background: var(--accent-button-text, #fff);
+  clip-path: polygon(14% 44%, 0 65%, 40% 100%, 100% 18%, 84% 0, 39% 66%);
+}
+.backup-check:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 .backup-check:disabled { cursor: default; opacity: 0.5; }
 .backup-path { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .backup-reveal {
@@ -355,27 +368,7 @@ export const CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.backup-path-input {
-  flex: 1 1 auto;
-  width: 0;
-  min-width: 0;
-  height: 24px;
-  padding: 0 var(--space-2);
-  box-sizing: border-box;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
-  outline: none;
-  background: transparent;
-  color: var(--text-color);
-  font-family: inherit;
-  font-size: var(--smaller-font-size);
-  text-overflow: ellipsis;
-}
-.backup-path-input:focus { border-color: var(--accent-color); }
-.backup-path-input::placeholder { color: var(--text-tertiary); }
-.backup-path-input:disabled { color: var(--text-tertiary); opacity: 0.6; }
-
-/* The path rows' 22px button sits 4px left so its glyph centres under the checkbox
+/* The path rows' 22px button sits 3px left so its glyph centres under the checkbox
    and the path text lines up with the folder name. */
 .backup-folder {
   display: flex;
@@ -386,14 +379,14 @@ export const CSS = `
   border-top: 1px solid var(--border-light);
 }
 .backup-rows > .backup-folder:first-child { border-top: none; padding-top: 0; }
-.backup-folder > .backup-path { margin-left: -4px; }
+.backup-folder > .backup-path { margin-left: -3px; }
 .backup-path.is-missing .backup-path-text { color: var(--negative-color); }
-.backup-folder-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; min-height: 22px; }
+.backup-folder-head { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 22px; }
 .backup-folder-head .backup-row-label { flex: 1 1 auto; min-width: 0; }
 .backup-folder.is-off .backup-row-label,
 .backup-folder.is-off .backup-path-text { color: var(--text-tertiary); opacity: 0.6; }
 .backup-folder-reason {
-  padding-left: 22px;
+  padding-left: 23px;
   font-size: var(--smaller-font-size);
   color: var(--negative-color);
   line-height: 1.45;
@@ -490,6 +483,7 @@ export const CSS = `
 .backup-alert-actions > .backup-btn { flex: 1 1 auto; min-width: 0; }
 
 .backup-note { font-size: var(--smaller-font-size); color: var(--text-tertiary); line-height: 1.45; }
+.backup-note--danger { color: var(--negative-color); }
 
 /* ---- Empty states -------------------------------------------------------- */
 .backup-empty {

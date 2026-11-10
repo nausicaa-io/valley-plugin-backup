@@ -173,5 +173,7 @@
   "backup.folder.noneSelected": "请至少选择一个要备份的文件夹。",
   "backup.reveal.failed": "无法显示 {{path}}。请检查驱动器是否已连接。",
   "backup.folder.missing": "未找到文件夹，已跳过。",
-  "backup.folder.allMissing": "未找到任何选定的文件夹。"
+  "backup.folder.allMissing": "未找到任何选定的文件夹。",
+  "backup.options.archiveTitle": "归档",
+  "backup.options.logTitle": "日志"
 }

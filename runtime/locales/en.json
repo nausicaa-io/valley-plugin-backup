@@ -173,5 +173,7 @@
   "backup.folder.noneSelected": "Select at least one folder to back up.",
   "backup.reveal.failed": "Could not show {{path}}. Check that the drive is connected.",
   "backup.folder.missing": "Folder not found. Skipped.",
-  "backup.folder.allMissing": "None of the selected folders were found."
+  "backup.folder.allMissing": "None of the selected folders were found.",
+  "backup.options.archiveTitle": "Archive",
+  "backup.options.logTitle": "Log"
 }

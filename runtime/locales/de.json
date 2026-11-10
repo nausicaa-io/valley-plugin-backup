@@ -173,5 +173,7 @@
   "backup.folder.noneSelected": "Wähle mindestens einen Ordner für das Backup aus.",
   "backup.reveal.failed": "{{path}} konnte nicht angezeigt werden. Prüfe, ob das Laufwerk verbunden ist.",
   "backup.folder.missing": "Ordner nicht gefunden. Übersprungen.",
-  "backup.folder.allMissing": "Keiner der ausgewählten Ordner wurde gefunden."
+  "backup.folder.allMissing": "Keiner der ausgewählten Ordner wurde gefunden.",
+  "backup.options.archiveTitle": "Archiv",
+  "backup.options.logTitle": "Protokoll"
 }

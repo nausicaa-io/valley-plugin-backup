@@ -173,5 +173,7 @@
   "backup.folder.noneSelected": "Selecciona al menos una carpeta para la copia.",
   "backup.reveal.failed": "No se pudo mostrar {{path}}. Comprueba que la unidad esté conectada.",
   "backup.folder.missing": "Carpeta no encontrada. Omitida.",
-  "backup.folder.allMissing": "No se encontró ninguna de las carpetas seleccionadas."
+  "backup.folder.allMissing": "No se encontró ninguna de las carpetas seleccionadas.",
+  "backup.options.archiveTitle": "Archivo",
+  "backup.options.logTitle": "Registro"
 }

@@ -173,5 +173,7 @@
   "backup.folder.noneSelected": "Sélectionnez au moins un dossier à sauvegarder.",
   "backup.reveal.failed": "Impossible d’afficher {{path}}. Vérifiez que le disque est connecté.",
   "backup.folder.missing": "Dossier introuvable. Ignoré.",
-  "backup.folder.allMissing": "Aucun des dossiers sélectionnés n’a été trouvé."
+  "backup.folder.allMissing": "Aucun des dossiers sélectionnés n’a été trouvé.",
+  "backup.options.archiveTitle": "Archive",
+  "backup.options.logTitle": "Journal"
 }

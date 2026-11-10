@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { deletionRoots, createMirrorEngine } from '../src/backend/mirror'
+import { createMirrorEngine } from '../src/backend/mirror'
 import { createMirrorService } from '../src/backend/mirrorService'
 const fixture = mirrorFixture()
 const mirrorTree = createMirrorEngine(fixture.fs)
@@ -312,33 +312,103 @@ describe('mirrorTree', () => {
   })
 })
 
-describe('deletionRoots', () => {
-  it('collapses a fully doomed subtree to its topmost entry', () => {
-    const deletes = ['gone/a/b/deep.md', 'gone/a/b', 'gone/a', 'gone', 'gone/top.md']
+describe('large trees', () => {
+  type Node = { kind: 'file'; size: number; mtimeMs: number } | { kind: 'dir'; children: Map<string, Node> }
+  const dir = (): Extract<Node, { kind: 'dir' }> => ({ kind: 'dir', children: new Map() })
+  const file = (mtimeMs = 1000): Node => ({ kind: 'file', size: 1, mtimeMs })
+  function memoryFs(roots: Record<string, Extract<Node, { kind: 'dir' }>>, refuse?: (path: string, call: number) => boolean) {
+    const lists = new Map<string, number>()
+    const copies: string[] = []
+    const removed: string[] = []
+    const find = (path: string): Node | undefined => {
+      for (const [root, node] of Object.entries(roots)) {
+        if (path !== root && !path.startsWith(`${root}/`)) continue
+        return path.slice(root.length + 1).split('/').filter(Boolean).reduce<Node | undefined>((at, name) => (at?.kind === 'dir' ? at.children.get(name) : undefined), node)
+      }
+      return undefined
+    }
+    const stat = (entry: Node, name: string) => ({ name, kind: entry.kind, size: entry.kind === 'file' ? entry.size : 0, mtimeMs: entry.kind === 'file' ? entry.mtimeMs : 0, isDirectory: () => entry.kind === 'dir', isFile: () => entry.kind === 'file', isSymbolicLink: () => false })
+    const fs = {
+      assertActive: () => {},
+      stat: async (path: string) => stat(find(path)!, ''),
+      lstat: async (path: string) => stat(find(path)!, ''),
+      mkdir: async () => {},
+      utimes: async () => {},
+      copyFile: async (_from: string, to: string) => { copies.push(to) },
+      commit: async () => {},
+      rm: async (path: string) => { removed.push(path) },
+      rename: async (from: string) => { removed.push(from) },
+      readdir: async (path: string) => {
+        const call = (lists.get(path) ?? 0) + 1
+        lists.set(path, call)
+        if (refuse?.(path, call)) throw new Error('unreadable')
+        const node = find(path)
+        if (node?.kind !== 'dir') throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        return [...node.children].map(([name, entry]) => stat(entry, name))
+      }
+    }
+    return { fs: fs as unknown as Parameters<typeof createMirrorEngine>[0], lists, copies, removed }
+  }
+  function tree(folders: number, perFolder: number) {
+    const root = dir()
+    for (let f = 0; f < folders; f++) {
+      const folder = dir()
+      for (let n = 0; n < perFolder; n++) folder.children.set(`file${n}`, file())
+      root.children.set(`folder${f}`, folder)
+    }
+    return root
+  }
+  const paths = { source: '/src', destination: '/dst', exclude: [] as string[] }
 
-    expect(deletionRoots(deletes, deletes)).toEqual([{ rel: 'gone', entries: 5 }])
+  it('lists each folder once on both sides when nothing changed', async () => {
+    const m = memoryFs({ '/src': tree(40, 100), '/dst': tree(40, 100) })
+    expect(await createMirrorEngine(m.fs)(paths)).toMatchObject({ ok: true, copied: 0 })
+    expect([...m.lists.values()].every((count) => count === 1)).toBe(true)
+    expect(m.lists.size).toBe(82)
   })
 
-  it('keeps a directory that holds a survivor, and removes its doomed children one by one', () => {
-    const dest = ['stale/junk.md', 'stale/notes.keep', 'stale/sub/x.md', 'stale/sub', 'stale']
-    const deletes = ['stale/sub/x.md', 'stale/sub', 'stale/junk.md', 'stale']
-
-    // `stale` survives (it holds the excluded `notes.keep`), so its doomed
-    // children are removed individually — `sub` still collapsing as a unit.
-    expect(deletionRoots(deletes, dest)).toEqual([
-      { rel: 'stale/junk.md', entries: 1 },
-      { rel: 'stale/sub', entries: 2 }
-    ])
+  it('lists only the changed folder again before copying', async () => {
+    const src = tree(40, 100)
+    ;(src.children.get('folder7') as Extract<Node, { kind: 'dir' }>).children.set('file3', file(900_000))
+    const m = memoryFs({ '/src': src, '/dst': tree(40, 100) })
+    expect(await createMirrorEngine(m.fs)(paths)).toMatchObject({ ok: true, copied: 1, updates: ['folder7/file3'] })
+    expect([...m.lists].filter(([, count]) => count > 1).map(([path]) => path).sort()).toEqual(['/dst/folder7', '/src/folder7'])
   })
 
-  it('accounts for every removed entry exactly once', () => {
-    const dest = ['a', 'a/x.md', 'b', 'b/c', 'b/c/y.md', 'keep.md']
-    const deletes = ['a', 'a/x.md', 'b', 'b/c', 'b/c/y.md']
+  it('copies a whole new tree while keeping only a bounded list of its paths', async () => {
+    const m = memoryFs({ '/src': tree(60, 100), '/dst': dir() })
+    const out = await createMirrorEngine(m.fs)(paths)
+    expect(out).toMatchObject({ ok: true, copied: 6000 })
+    expect(m.copies).toHaveLength(6000)
+    expect(out.creates).toHaveLength(5000)
+  })
 
-    const roots = deletionRoots(deletes, dest)
+  it('leaves a destination folder alone when its source cannot be read again before the copy', async () => {
+    const src = dir(), dest = dir()
+    const inner = dir(); inner.children.set('kept', file())
+    const innerDest = dir(); innerDest.children.set('kept', file()); innerDest.children.set('stale', file())
+    src.children.set('inner', inner); dest.children.set('inner', innerDest)
+    const m = memoryFs({ '/src': src, '/dst': dest }, (path, call) => path === '/src/inner' && call === 2)
+    const out = await createMirrorEngine(m.fs)(paths)
+    expect(out.ok).toBe(false)
+    expect(m.removed).toEqual([])
+  })
 
-    expect(roots.map((r) => r.rel)).toEqual(['a', 'b'])
-    expect(roots.reduce((sum, r) => sum + r.entries, 0)).toBe(deletes.length)
+  it('removes a doomed folder as one unit and counts everything under it', async () => {
+    const dest = dir(), gone = dir(), nested = dir()
+    nested.children.set('deep', file()); gone.children.set('a', nested); gone.children.set('top', file()); dest.children.set('gone', gone); dest.children.set('other', file())
+    const src = dir(); src.children.set('other', file())
+    const m = memoryFs({ '/src': src, '/dst': dest, '/archive': dir() })
+    expect(await createMirrorEngine(m.fs)({ ...paths, backupDir: '/archive' })).toMatchObject({ ok: true, archived: 4 })
+    expect(m.removed).toEqual(['/dst/gone'])
+  })
+
+  it('keeps a folder holding an excluded file and removes its other children one by one', async () => {
+    const dest = dir(), stale = dir(), sub = dir()
+    sub.children.set('x', file()); stale.children.set('junk', file()); stale.children.set('notes.keep', file()); stale.children.set('sub', sub); dest.children.set('stale', stale)
+    const m = memoryFs({ '/src': (() => { const s = dir(); s.children.set('other', file()); return s })(), '/dst': dest })
+    expect(await createMirrorEngine(m.fs)({ ...paths, exclude: ['*.keep'] })).toMatchObject({ ok: true })
+    expect(m.removed.sort()).toEqual(['/dst/stale/junk', '/dst/stale/sub'])
   })
 })
 

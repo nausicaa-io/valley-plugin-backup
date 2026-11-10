@@ -241,8 +241,10 @@ describe('Backup schedule and stop', () => {
     const log = screen.getByRole('checkbox', { name: 'Write log' })
     expect(keep).toBeChecked()
     expect(log).toBeChecked()
-    expect(screen.getByDisplayValue('/backups/deleted-files')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('/backups/logs')).toBeInTheDocument()
+    expect(screen.getByText('/backups/deleted-files')).toBeInTheDocument()
+    expect(screen.getByText('/backups/logs')).toBeInTheDocument()
+    expect(screen.getByText('Archive')).toBeInTheDocument()
+    expect(screen.getByText('Log')).toBeInTheDocument()
     expect(screen.getByText('ferns')).toBeInTheDocument()
     expect(screen.getByText('/fixtures/moss')).toBeInTheDocument()
     expect(screen.getByText('/backups/moss')).toBeInTheDocument()
@@ -259,6 +261,24 @@ describe('Backup schedule and stop', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Keep deleted files' }))
     await waitFor(() => expect(saved().noArchive).toBeUndefined())
     expect(screen.queryByText('Changed and deleted files are removed permanently.')).not.toBeInTheDocument()
+    await dispose()
+  })
+
+  it('keeps the Archive and Log folder buttons clickable when no path is set', async () => {
+    const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: settingsWith({ trashPath: '', logDirectory: '', mappings: [{ source: '/fixtures/ferns', destination: '/backups/ferns' }] }) })
+    const backendCall = vi.fn(async () => true)
+    api.backend.call = backendCall as unknown as typeof api.backend.call
+    const settings = vi.spyOn(api.workspace, 'openOwnSettings')
+    const dispose = register(api)
+    render(React.createElement(viewOf(api, 'backup.panel')))
+    const options = (await screen.findByRole('checkbox', { name: 'Keep deleted files' })).closest('.backup-options') as HTMLElement
+    const [archive, log] = Array.from(options.querySelectorAll('button'))
+    expect(archive).toBeEnabled()
+    expect(log).toBeEnabled()
+    fireEvent.click(archive)
+    await waitFor(() => expect(backendCall).toHaveBeenCalledWith('reveal', expect.objectContaining({ path: '/backups/ferns' })))
+    fireEvent.click(log)
+    expect(settings).toHaveBeenCalled()
     await dispose()
   })
 

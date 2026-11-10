@@ -66,7 +66,6 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
     const [, bumpTick] = React.useState(0)
     const maxOverallRef = React.useRef(0)
     const logRef = React.useRef<HTMLPreElement | null>(null)
-    const focusedValueRef = React.useRef('')
 
     const nameFor = (id: string): string => profiles.find((p) => p.id === id)?.name ?? 'Backup'
 
@@ -230,12 +229,13 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
       const result = await backupApi(api).reveal({ label: 'reveal', mappings: [{ source: path, destination: path, exclude: [] }], trashPath: '', logDirectory: '', masterLog: '', retention: null }, path)
       if (!result.ok) await api.ui.confirm({ title: uiText('manifest.name'), message: uiText('backup.reveal.failed', { path }), actions: [{ label: uiText('auto.77dfd2135f4d'), value: 'close' }] })
     }
-    const revealButton = (rawPath: string): ReturnType<typeof h> => {
+    // An unset option has no folder of its own, so its button goes where that option's files live or where it is set.
+    const revealButton = (rawPath: string, unset?: { title: string; run: () => void }): ReturnType<typeof h> => {
       const path = rawPath.trim()
-      const label = api.files.revealLabel()
+      const label = path || !unset ? api.files.revealLabel() : unset.title
       return h(
         'button',
-        { type: 'button', className: 'backup-reveal', disabled: !path, title: label, 'aria-label': path ? `${label}: ${path}` : label, onClick: () => void reveal(path) },
+        { type: 'button', className: 'backup-reveal', disabled: !path && !unset, title: label, 'aria-label': path ? `${label}: ${path}` : label, onClick: () => { if (path) void reveal(path); else unset?.run() } },
         IconFolderOpen
       )
     }
@@ -398,19 +398,16 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
       : null
 
     // What happens to replaced files and to the run's log, for the selected profile.
-    const patchSelected = (patch: Partial<Profile>, persist: boolean): void => {
+    const patchSelected = (patch: Partial<Profile>): void => {
       const next = profileStore.getSnapshot().map((p) => (p.id === selectedId ? { ...p, ...patch } : p))
-      if (!persist) {
-        profileStore.setDraft(next)
-        return
-      }
       void profileStore.save(next).catch(() => api.ui.confirm({ title: uiText('auto.432e860f10ff'), message: uiText('backup.properties.saveError'), actions: [{ label: uiText('auto.77dfd2135f4d'), value: 'close' }] }))
     }
-    const optionRow = (label: string, enabled: boolean, onToggle: (next: boolean) => void, field: 'trashPath' | 'logDirectory', placeholder: string, note: string | null): ReturnType<typeof h> => {
-      const value = selectedProfile?.[field] ?? ''
+    const optionRow = (title: string, label: string, enabled: boolean, onToggle: (next: boolean) => void, field: 'trashPath' | 'logDirectory', placeholder: string, note: string | null, unset: { title: string; run: () => void }): ReturnType<typeof h> => {
+      const value = (selectedProfile?.[field] ?? '').trim()
       return h(
         'div',
-        { key: field, className: 'backup-option' },
+        { key: field, className: `backup-option${enabled ? '' : ' is-off'}` },
+        h('span', { className: 'backup-section-title' }, title),
         h(
           'div',
           { className: 'backup-path' },
@@ -422,45 +419,39 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
             checked: enabled,
             onChange: (e: { target: HTMLInputElement }) => onToggle(e.target.checked)
           }),
-          revealButton(value),
-          h('input', {
-            type: 'text',
-            className: 'backup-path-input',
-            title: value || label,
-            value,
-            placeholder,
-            spellCheck: false,
-            'aria-label': `${label}: ${placeholder}`,
-            disabled: !enabled,
-            onChange: (e: { target: HTMLInputElement }) => patchSelected({ [field]: e.target.value }, false),
-            onFocus: (e: { target: HTMLInputElement }) => { focusedValueRef.current = e.target.value },
-            onBlur: (e: { target: HTMLInputElement }) => { if (e.target.value !== focusedValueRef.current) patchSelected({ [field]: e.target.value }, true) },
-            onKeyDown: (e: { key: string; currentTarget: HTMLInputElement }) => { if (e.key === 'Enter') e.currentTarget.blur() }
-          })
+          revealButton(value, unset),
+          h('span', { className: 'backup-path-text', title: value || placeholder }, value || placeholder)
         ),
-        note ? h('span', { className: 'backup-note', role: 'status' }, note) : null
+        note ? h('span', { className: 'backup-note backup-note--danger', role: 'status' }, note) : null
       )
     }
+    const settingsButton = { title: uiText('auto.432e860f10ff'), run: openSettings }
+    const firstDestination = selectedRows.find((row) => !row.disabled)?.destination.trim() ?? selectedRows[0]?.destination.trim()
+    const archiveButton = firstDestination ? { title: api.files.revealLabel(), run: () => void reveal(firstDestination) } : settingsButton
     const optionRows = selectedProfile && status !== 'running'
       ? [
           h(
             'div',
             { key: 'options', className: 'backup-options' },
             optionRow(
+              uiText('backup.options.archiveTitle'),
               uiText('backup.options.keepDeleted'),
               !selectedProfile.noArchive,
-              (next) => patchSelected({ noArchive: !next }, true),
+              (next) => patchSelected({ noArchive: !next }),
               'trashPath',
               uiText('backup.options.keepDeletedPlaceholder'),
-              selectedProfile.noArchive ? uiText('backup.options.deletePermanently') : null
+              selectedProfile.noArchive ? uiText('backup.options.deletePermanently') : null,
+              archiveButton
             ),
             optionRow(
+              uiText('backup.options.logTitle'),
               uiText('backup.options.log'),
               !selectedProfile.noLogs,
-              (next) => patchSelected({ noLogs: !next }, true),
+              (next) => patchSelected({ noLogs: !next }),
               'logDirectory',
               uiText('backup.options.logPlaceholder'),
-              null
+              null,
+              settingsButton
             )
           )
         ]
@@ -471,7 +462,7 @@ export function createBackupPanel(api: ValleyPluginApi, view: { getSnapshot(): B
         if (row !== target) return row
         const { disabled: _disabled, ...rest } = row
         return enabled ? rest : { ...rest, disabled: true }
-      }) }, true)
+      }) })
     const pathRow = (path: string): ReturnType<typeof h> =>
       h('div', { className: `backup-path${missingFolders.includes(path) ? ' is-missing' : ''}` }, revealButton(path), h('span', { className: 'backup-path-text', title: path }, path))
 
