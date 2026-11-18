@@ -202,8 +202,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   let polling: Promise<void> | undefined
   let closed = false
   // A host wake time (lifecycle.wakeAt) replaces the former minute check, so the backend may sleep until the next due run
-  // (GODS G6); a host without it keeps the 60 s interval.
-  const hostWake = typeof api.lifecycle.wakeAt === 'function' && typeof api.lifecycle.onWake === 'function'
+  // (GODS G6); the backend starts on use and has no repeating timer (GODS-PLAN-V2 L1).
   const NEXT_RUN_WAKE = 'backup.next'
   let afterExclusive = (): void => {}
   const statuses: Record<string, { nextAt: number | null; waiting: string | null }> = {}
@@ -237,7 +236,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   }
   /** The earliest due run of a scheduled profile; a waiting one (failed preflight) or a busy backend retries in a minute. */
   const armNextRun = (): void => {
-    if (!hostWake || closed) return
+    if (closed) return
     const now = Date.now()
     let next: number | null = null
     const at = (value: number): void => { if (next === null || value < next) next = value }
@@ -250,24 +249,14 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     }
     void api.lifecycle.wakeAt(NEXT_RUN_WAKE, next).catch(() => {})
   }
-  afterExclusive = () => { if (hostWake && !closed) poll() }
-  if (hostWake) subscriptions.push(api.lifecycle.onWake(event => { if (event.key === NEXT_RUN_WAKE) poll() }))
-  // Only a saved schedule needs the minute check; a backend without one stays asleep.
-  let interval: ReturnType<typeof setInterval> | undefined
-  const syncInterval = (): void => {
-    const scheduled = parseProfiles(api.settings.get()).some(profile => profile.schedule && profile.schedule.every !== 'off' && profile.rows.some(row => row.source && row.destination))
-    if (hostWake) return
-    if (scheduled && interval === undefined) interval = setInterval(poll, 60000)
-    else if (!scheduled && interval !== undefined) { clearInterval(interval); interval = undefined }
-  }
-  syncInterval()
-  subscriptions.push(api.lifecycle.onResume(poll), api.settings.subscribe(() => { syncInterval(); poll() }))
+  afterExclusive = () => { if (!closed) poll() }
+  subscriptions.push(api.lifecycle.onWake(event => { if (event.key === NEXT_RUN_WAKE) poll() }))
+  subscriptions.push(api.lifecycle.onResume(poll), api.settings.subscribe(() => { poll() }))
   poll()
   return () => {
     if (disposal) return disposal
     closed = true
     workflow.dispose()
-    if (interval !== undefined) clearInterval(interval)
     const failures: unknown[] = []
     for (const unsubscribe of subscriptions) { try { unsubscribe() } catch (error) { failures.push(error) } }
     return disposal = jobs.dispose().then(() => {
