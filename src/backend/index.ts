@@ -121,7 +121,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
           cancellation?.removeEventListener('abort', forward)
           if (activeRun === stopper) { activeRun = undefined; runStatus = undefined }
         }
-        if (exclusive) busy = false
+        if (exclusive) { busy = false; afterExclusive() }
       }
     }
     subscriptions.push(method === 'reveal' || method === 'missingFolders' ? api.rpc.handle(method, raw => execute(raw, api)) : workflow.operation(method, (raw, context) => {
@@ -201,6 +201,11 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   }))
   let polling: Promise<void> | undefined
   let closed = false
+  // A host wake time (lifecycle.wakeAt) replaces the former minute check, so the backend may sleep until the next due run
+  // (GODS G6); a host without it keeps the 60 s interval.
+  const hostWake = typeof api.lifecycle.wakeAt === 'function' && typeof api.lifecycle.onWake === 'function'
+  const NEXT_RUN_WAKE = 'backup.next'
+  let afterExclusive = (): void => {}
   const statuses: Record<string, { nextAt: number | null; waiting: string | null }> = {}
   subscriptions.push(api.rpc.handle('schedule.snapshot', () => statuses))
   const poll = (): void => {
@@ -228,12 +233,30 @@ export function register(api: PluginBackendApi): () => Promise<void> {
         await api.lifecycle.runBackground('run', { plan, identity: { id: `scheduled:${profile.id}:${slot}`, startedAt: new Date().toISOString(), profileId: profile.id, profileName: profile.name, trigger: 'scheduled' } })
       }
       api.rpc.emit('backup.schedule', statuses)
-    })().catch(() => {}).finally(() => { polling = undefined })
+    })().catch(() => {}).finally(() => { polling = undefined; armNextRun() })
   }
+  /** The earliest due run of a scheduled profile; a waiting one (failed preflight) or a busy backend retries in a minute. */
+  const armNextRun = (): void => {
+    if (!hostWake || closed) return
+    const now = Date.now()
+    let next: number | null = null
+    const at = (value: number): void => { if (next === null || value < next) next = value }
+    for (const profile of parseProfiles(api.settings.get())) {
+      const schedule = profile.schedule
+      if (!schedule || schedule.every === 'off' || !profile.rows.some(row => row.source && row.destination)) continue
+      const status = statuses[profile.id]
+      if (busy || !status || status.waiting) at(now + 60_000)
+      else if (status.nextAt !== null) at(Math.max(status.nextAt, now + 1000))
+    }
+    void api.lifecycle.wakeAt(NEXT_RUN_WAKE, next).catch(() => {})
+  }
+  afterExclusive = () => { if (hostWake && !closed) poll() }
+  if (hostWake) subscriptions.push(api.lifecycle.onWake(event => { if (event.key === NEXT_RUN_WAKE) poll() }))
   // Only a saved schedule needs the minute check; a backend without one stays asleep.
   let interval: ReturnType<typeof setInterval> | undefined
   const syncInterval = (): void => {
     const scheduled = parseProfiles(api.settings.get()).some(profile => profile.schedule && profile.schedule.every !== 'off' && profile.rows.some(row => row.source && row.destination))
+    if (hostWake) return
     if (scheduled && interval === undefined) interval = setInterval(poll, 60000)
     else if (!scheduled && interval !== undefined) { clearInterval(interval); interval = undefined }
   }

@@ -377,9 +377,17 @@
     ],
     "activation": {
       "backend": [
-        "background",
         "capability"
-      ]
+      ],
+      "wake": {
+        "notifications": true,
+        "settings": true,
+        "resume": true,
+        "timers": true
+      },
+      "idle": {
+        "stopAfterMs": 600000
+      }
     },
     "services": [
       {

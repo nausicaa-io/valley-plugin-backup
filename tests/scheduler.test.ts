@@ -10,7 +10,9 @@ import { slotStart } from '../src/schedule'
 const NOW = new Date(2026, 8, 24, 9).getTime()
 const profiles = [{ id: 'field', name: 'Field archive', mappings: [{ source: '/fixtures/source', destination: '/fixtures/destination' }], schedule: { every: 'daily', time: '02:00', since: new Date(2026, 0, 1).getTime() } }]
 
-async function fixture(rows: RunRecord[] = [], saved = profiles) {
+async function fixture(rows: RunRecord[] = [], saved = profiles, options: { hostWake?: boolean } = {}) {
+  const wakes = new Map<string, number | null>()
+  let onWake: ((event: { key: string; at: number; firedAt: number; late: boolean }) => void) | undefined
   const { api } = createMockValleyApi({ manifest: { id: 'backup' }, settings: { profiles: saved } })
   const history = createHistoryStore(api)
   for (const row of rows) await history.insert(row)
@@ -23,20 +25,40 @@ async function fixture(rows: RunRecord[] = [], saved = profiles) {
     return { ok: true }
   })
   const notify = vi.spyOn(api.notifications, 'notify').mockResolvedValue(true)
-  const backend = { ...api, i18n: { t: api.ui.t, language: () => 'en', onLanguageChanged: () => () => {} }, lifecycle: { onResume: () => () => {}, runBackground: (method: string, value: unknown) => method === 'check' ? check() : run(value) },
+  const backend = { ...api, i18n: { t: api.ui.t, language: () => 'en', onLanguageChanged: () => () => {} }, lifecycle: { onResume: () => () => {}, runBackground: (method: string, value: unknown) => method === 'check' ? check() : run(value), ...(options.hostWake ? { wakeAt: vi.fn(async (key: string, at: number | null) => { wakes.set(key, at) }), onWake: (listener: NonNullable<typeof onWake>) => { onWake = listener; return () => { onWake = undefined } } } : {}) },
     rpc: { emit: (event: string, value: unknown) => listeners.get(event)?.(structuredClone(value)), handle: (name: string, handler: (payload?: unknown) => unknown) => { handlers.set(name, handler); return () => handlers.delete(name) }, handleOperation: () => () => {} }
   } as unknown as PluginBackendApi
   api.backend.call = async <T>(method: string) => await handlers.get(method)!() as T
   api.backend.on = (event, callback) => { listeners.set(event, callback); return () => { listeners.delete(event) } }
   const off = register(backend)
   const client = createBackupScheduler(api, {} as never)
-  return { api, client, check, run, notify, off }
+  return { api, client, check, run, notify, off, wakes, wake: (key: string) => onWake?.({ key, at: Date.now(), firedAt: Date.now(), late: false }) }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('background backup scheduling', () => {
+  it('sets one host wake time for the next due run instead of a minute timer, and runs the slot when it fires (GODS G6)', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    const f = await fixture([{ id: 'previous', profileId: 'field', startedAt: new Date(2026, 8, 24, 8).toISOString(), ok: true, trigger: 'manual' }], profiles, { hostWake: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(interval).not.toHaveBeenCalledWith(expect.anything(), 60000)
+    const next = new Date(2026, 8, 25, 2).getTime()
+    expect(f.wakes.get('backup.next')).toBe(next)
+    expect(f.run).not.toHaveBeenCalled()
+    vi.setSystemTime(next)
+    f.wake('backup.next')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.run).toHaveBeenCalledWith(expect.objectContaining({ identity: expect.objectContaining({ id: `scheduled:field:${next}`, trigger: 'scheduled' }) }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.wakes.get('backup.next')).toBe(new Date(2026, 8, 26, 2).getTime())
+    await f.api.settings.set('profiles', [{ ...profiles[0], schedule: { every: 'off' } }])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.wakes.get('backup.next')).toBeNull()
+    await f.client.dispose(); await f.off()
+  })
+
   it('keeps no minute timer while no profile has a schedule, and arms one when a schedule appears', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval')
     const f = await fixture([], [{ id: 'field', name: 'Field archive', mappings: [{ source: '/fixtures/source', destination: '/fixtures/destination' }] }] as never)

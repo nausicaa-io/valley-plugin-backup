@@ -47,3 +47,7 @@ The package owns `locales/en.json`, `de.json`, `es.json`, `fr.json`, and `zh-CN.
 The backend explicitly registers its supported blocks through `registerWorkflowContribution`. Workflow calls the owning operations with their original authentication, cancellation, grants, revisions, and receipts. The catalogue publishes Draft-07 parameter and port contracts; credential administration and approval bypasses are excluded. Workflow availability is configured separately in Workflow → Plugins. Existing account, connection, and profile settings remain owned by this plugin.
 
 Workflow output collections are explicit: `profile.list` → `$.profiles`, `profile.check` → `$.issues`. Selectors are relative to each execution item’s `json`. Profile checking deliberately exposes its complete findings array. Run receipts, prune results and restore plans contain optional or competing issues, dropped paths, errors, creates, updates, deletes and skipped paths, so they have no collection selector.
+
+## When the backend runs
+
+The Backup backend starts on first use and stops after ten idle minutes. A saved schedule keeps one host wake time for the next due run instead of a check every minute; settings changes and system resume wake it too.
