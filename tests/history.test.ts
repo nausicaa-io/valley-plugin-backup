@@ -47,7 +47,7 @@ it('does not mutate a destination when the backend history claim cannot be saved
   const operations = new Map<string, (value: unknown, context: PluginBackendOperationContext) => Promise<unknown>>()
   const storage = { open: vi.fn(), close: vi.fn(), copy: vi.fn() }
   const backend = { pluginId: 'backup', data: api.data, settings: api.settings, notifications: api.notifications,
-    lifecycle: { onResume: () => () => {} }, i18n: { t: api.ui.t, language: () => 'en', onLanguageChanged: () => () => {} },
+    lifecycle: { onResume: () => () => {}, onWake: () => () => {}, wakeAt: async () => {} }, i18n: { t: api.ui.t, language: () => 'en', onLanguageChanged: () => () => {} },
     storage, rpc: { emit: vi.fn(), handle: () => () => {}, handleOperation: (name: string, handler: typeof operations extends Map<string, infer H> ? H : never) => { operations.set(name, handler); return () => {} } }
   } as unknown as PluginBackendApi
   const off = register(backend)

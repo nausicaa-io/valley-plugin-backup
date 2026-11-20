@@ -33,7 +33,8 @@ const completed = { ok: true, mappings: 1, archived: 2, durationSec: 1, errors: 
 
 function storageMock() {
   let id = 0
-  const api: PluginStorageApi = {
+  // A host without the native mirror: storageFs detects mirrorStart and these tests run its copy path.
+  const api: Omit<PluginStorageApi, 'mirrorStart' | 'mirrorPoll' | 'mirrorCancel'> = {
     open: vi.fn(async (input) => ({ ...input, path: input.area === 'realm' ? '/fixtures/active-realm' : input.path, handle: `grant-${++id}` })),
     close: vi.fn(async () => {}),
     stat: vi.fn(async () => ({ name: 'fixture', kind: 'directory' as const, size: 0, mtimeMs: 0 })),
@@ -48,12 +49,9 @@ function storageMock() {
     remove: vi.fn(async () => {}), copy: vi.fn(async () => {}), move: vi.fn(async () => {}),
     readLink: vi.fn(async () => ''), link: vi.fn(async () => {}), setTimes: vi.fn(async () => {}),
     reveal: vi.fn(async () => {}), snapshotDatasets: vi.fn(async () => ({ handle: 'snapshot', files: [], excluded: [] })),
-    restoreDatasets: vi.fn(async () => ({ stores: [], skipped: [] })),
-    mirrorStart: vi.fn(async () => { throw new Error('Unused fixture operation') }),
-    mirrorPoll: vi.fn(async () => { throw new Error('Unused fixture operation') }),
-    mirrorCancel: vi.fn(async () => { throw new Error('Unused fixture operation') })
+    restoreDatasets: vi.fn(async () => ({ stores: [], skipped: [] }))
   }
-  return api
+  return api as PluginStorageApi
 }
 
 function backend(storage = storageMock()) {
@@ -63,7 +61,7 @@ function backend(storage = storageMock()) {
   const emit = vi.fn()
   const mock = createMockValleyApi({ manifest: { id: 'backup' } })
   const api = {
-    data: mock.api.data, notifications: mock.api.notifications, settings: mock.api.settings, lifecycle: { onResume: () => () => {} },
+    data: mock.api.data, notifications: mock.api.notifications, settings: mock.api.settings, lifecycle: { onResume: () => () => {}, onWake: () => () => {}, wakeAt: async () => {} },
     pluginId: 'backup', storage: ambient,
     rpc: {
       handle: (method: string, handler: (payload: unknown) => unknown) => { handlers.set(method, handler); return () => { handlers.delete(method) } },
