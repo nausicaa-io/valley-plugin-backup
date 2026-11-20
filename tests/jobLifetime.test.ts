@@ -48,7 +48,10 @@ function storageMock() {
     remove: vi.fn(async () => {}), copy: vi.fn(async () => {}), move: vi.fn(async () => {}),
     readLink: vi.fn(async () => ''), link: vi.fn(async () => {}), setTimes: vi.fn(async () => {}),
     reveal: vi.fn(async () => {}), snapshotDatasets: vi.fn(async () => ({ handle: 'snapshot', files: [], excluded: [] })),
-    restoreDatasets: vi.fn(async () => ({ stores: [], skipped: [] }))
+    restoreDatasets: vi.fn(async () => ({ stores: [], skipped: [] })),
+    mirrorStart: vi.fn(async () => { throw new Error('Unused fixture operation') }),
+    mirrorPoll: vi.fn(async () => { throw new Error('Unused fixture operation') }),
+    mirrorCancel: vi.fn(async () => { throw new Error('Unused fixture operation') })
   }
   return api
 }
